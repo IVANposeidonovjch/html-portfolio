@@ -1,0 +1,155 @@
+import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { config } from '../config.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+
+fs.mkdirSync(path.dirname(path.resolve(config.dbPath)), { recursive: true });
+export const db = new Database(path.resolve(config.dbPath));
+db.exec(fs.readFileSync(path.join(here, 'schema.sql'), 'utf8'));
+
+export const now = () => Math.floor(Date.now() / 1000);
+
+/* ------------------------------- users -------------------------------- */
+
+const insertUser = db.prepare(
+  `INSERT INTO users (tg_id, username, created_at) VALUES (?, ?, ?)
+   ON CONFLICT(tg_id) DO UPDATE SET username = excluded.username`,
+);
+const selectUser = db.prepare('SELECT * FROM users WHERE tg_id = ?');
+
+export function upsertUser(tgId, username) {
+  insertUser.run(tgId, username || null, now());
+  return selectUser.get(tgId);
+}
+export const getUser = (tgId) => selectUser.get(tgId);
+
+export function effectivePlan(user) {
+  if (!user) return 'free';
+  if (user.plan === 'free') return 'free';
+  if (user.plan_until && user.plan_until < now()) return 'free';
+  return user.plan;
+}
+
+export const setPlan = db.prepare('UPDATE users SET plan = ?, plan_until = ? WHERE tg_id = ?');
+export const setMonitoring = db.prepare('UPDATE users SET monitoring_enabled = ? WHERE tg_id = ?');
+
+/* ------------------------------- chats -------------------------------- */
+
+export const upsertChat = db.prepare(
+  `INSERT INTO chats (owner_id, tg_chat_id, title, type, is_forum, created_at)
+   VALUES (@owner_id, @tg_chat_id, @title, @type, @is_forum, @created_at)
+   ON CONFLICT(owner_id, tg_chat_id)
+   DO UPDATE SET title = excluded.title, is_forum = excluded.is_forum`,
+);
+export const listChats = db.prepare(
+  'SELECT * FROM chats WHERE owner_id = ? ORDER BY type = \'private\' DESC, id',
+);
+export const getChat = db.prepare('SELECT * FROM chats WHERE id = ? AND owner_id = ?');
+export const getChatByTgId = db.prepare('SELECT * FROM chats WHERE owner_id = ? AND tg_chat_id = ?');
+export const deleteChat = db.prepare('DELETE FROM chats WHERE id = ? AND owner_id = ?');
+
+export const upsertTopic = db.prepare(
+  `INSERT INTO topics (chat_id, thread_id, name, created_at) VALUES (?, ?, ?, ?)
+   ON CONFLICT(chat_id, thread_id) DO UPDATE SET name = excluded.name`,
+);
+export const listTopics = db.prepare('SELECT * FROM topics WHERE chat_id = ? ORDER BY id');
+export const getTopic = db.prepare('SELECT * FROM topics WHERE id = ?');
+
+/* ------------------------------ searches ------------------------------ */
+
+export const insertSearch = db.prepare(
+  `INSERT INTO searches (user_id, name, url, domain, canonical_key, api_query,
+                         dest_chat_id, dest_thread_id, next_run_at, created_at)
+   VALUES (@user_id, @name, @url, @domain, @canonical_key, @api_query,
+           @dest_chat_id, @dest_thread_id, @next_run_at, @created_at)`,
+);
+export const listSearches = db.prepare('SELECT * FROM searches WHERE user_id = ? ORDER BY id');
+export const getSearch = db.prepare('SELECT * FROM searches WHERE id = ?');
+export const countSearches = db.prepare(
+  'SELECT COUNT(*) AS n FROM searches WHERE user_id = ?',
+);
+export const deleteSearch = db.prepare('DELETE FROM searches WHERE id = ? AND user_id = ?');
+export const toggleSearch = db.prepare(
+  'UPDATE searches SET enabled = ? WHERE id = ? AND user_id = ?',
+);
+export const renameSearch = db.prepare('UPDATE searches SET name = ? WHERE id = ? AND user_id = ?');
+
+export const dueSearches = db.prepare(
+  `SELECT s.* FROM searches s
+   JOIN users u ON u.tg_id = s.user_id
+   WHERE s.enabled = 1 AND u.monitoring_enabled = 1 AND s.next_run_at <= ?
+   ORDER BY s.next_run_at
+   LIMIT ?`,
+);
+export const scheduleNext = db.prepare('UPDATE searches SET next_run_at = ? WHERE id = ?');
+export const markRun = db.prepare(
+  `UPDATE searches SET last_run_at = ?, next_run_at = ?, error_count = 0, last_error = NULL,
+                       primed = 1, last_item_id = MAX(last_item_id, ?)
+   WHERE id = ?`,
+);
+export const markError = db.prepare(
+  `UPDATE searches SET last_run_at = ?, next_run_at = ?, error_count = error_count + 1,
+                       last_error = ? WHERE id = ?`,
+);
+export const bumpSent = db.prepare('UPDATE searches SET sent_count = sent_count + ? WHERE id = ?');
+
+/* ------------------------------- dedupe ------------------------------- */
+
+const insertSeen = db.prepare(
+  'INSERT OR IGNORE INTO seen_items (search_id, item_id, sent_at) VALUES (?, ?, ?)',
+);
+const hasSeen = db.prepare('SELECT 1 FROM seen_items WHERE search_id = ? AND item_id = ?');
+const insertDest = db.prepare(
+  'INSERT OR IGNORE INTO sent_destinations (dest_key, item_id, sent_at) VALUES (?, ?, ?)',
+);
+const hasDest = db.prepare('SELECT 1 FROM sent_destinations WHERE dest_key = ? AND item_id = ?');
+
+export const seen = {
+  has: (searchId, itemId) => !!hasSeen.get(searchId, itemId),
+  add: (searchId, itemId) => insertSeen.run(searchId, itemId, now()),
+  addMany: db.transaction((searchId, ids) => {
+    const t = now();
+    for (const id of ids) insertSeen.run(searchId, id, t);
+  }),
+  destHas: (destKey, itemId) => !!hasDest.get(destKey, itemId),
+  destAdd: (destKey, itemId) => insertDest.run(destKey, itemId, now()),
+};
+
+export const destKey = (chatId, threadId) => `${chatId}:${threadId || 0}`;
+
+/* -------------------------------- cache ------------------------------- */
+
+const getCache = db.prepare('SELECT * FROM poll_cache WHERE canonical_key = ?');
+const putCache = db.prepare(
+  `INSERT INTO poll_cache (canonical_key, fetched_at, payload) VALUES (?, ?, ?)
+   ON CONFLICT(canonical_key) DO UPDATE SET fetched_at = excluded.fetched_at,
+                                            payload = excluded.payload`,
+);
+export const cache = {
+  get(key, maxAgeSec) {
+    const row = getCache.get(key);
+    if (!row || now() - row.fetched_at > maxAgeSec) return null;
+    return JSON.parse(row.payload);
+  },
+  set: (key, items) => putCache.run(key, now(), JSON.stringify(items)),
+};
+
+/* -------------------------------- stats ------------------------------- */
+
+export const stats = () => ({
+  users: db.prepare('SELECT COUNT(*) n FROM users').get().n,
+  searches: db.prepare('SELECT COUNT(*) n FROM searches').get().n,
+  active: db.prepare('SELECT COUNT(*) n FROM searches WHERE enabled = 1').get().n,
+  uniqueKeys: db.prepare('SELECT COUNT(DISTINCT canonical_key) n FROM searches WHERE enabled = 1').get().n,
+  sent: db.prepare('SELECT COALESCE(SUM(sent_count),0) n FROM searches').get().n,
+});
+
+/** Housekeeping: drop dedupe rows older than 30 days, they cannot be re-fetched anyway. */
+export function pruneOldRows() {
+  const cutoff = now() - 30 * 24 * 3600;
+  db.prepare('DELETE FROM seen_items WHERE sent_at < ?').run(cutoff);
+  db.prepare('DELETE FROM sent_destinations WHERE sent_at < ?').run(cutoff);
+}

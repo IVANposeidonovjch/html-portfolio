@@ -1,0 +1,15 @@
+[Unit]
+Description=Vinted Telegram Monitor
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vinted-bot
+EnvironmentFile=/opt/vinted-bot/.env
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=5
+User=vinted
+
+[Install]
+WantedBy=multi-user.target

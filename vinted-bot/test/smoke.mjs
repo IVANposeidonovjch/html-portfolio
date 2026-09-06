@@ -1,0 +1,171 @@
+/**
+ * Offline smoke test: URL parsing, dedupe, priming, per-destination dedupe,
+ * shared fetch grouping. Run: node test/smoke.mjs
+ */
+process.env.BOT_TOKEN = 'test';
+process.env.DB_PATH = './data/test.sqlite';
+process.env.DEDUPE_PER_DESTINATION = 'true';
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+
+fs.rmSync('./data/test.sqlite', { force: true });
+fs.rmSync('./data/test.sqlite-wal', { force: true });
+fs.rmSync('./data/test.sqlite-shm', { force: true });
+
+const { parseSearchUrl, InvalidVintedUrl } = await import('../src/vinted/url.js');
+const store = await import('../src/db/index.js');
+const { Monitor } = await import('../src/monitor/scheduler.js');
+const { renderItem } = await import('../src/bot/format.js');
+const { normalizeItem } = await import('../src/vinted/normalize.js');
+
+let failures = 0;
+const test = (name, fn) => {
+  try {
+    fn();
+    console.log(`  ok  ${name}`);
+  } catch (e) {
+    failures++;
+    console.log(`FAIL  ${name}\n      ${e.message}`);
+  }
+};
+
+/* ------------------------------ url parsing ----------------------------- */
+
+test('parses filters and collapses repeated params', () => {
+  const p = parseSearchUrl('https://www.vinted.de/catalog?brand_ids[]=5&brand_ids[]=9&price_to=300&search_text=raf');
+  assert.equal(p.domain, 'www.vinted.de');
+  assert.equal(p.query.brand_ids, '5,9');
+  assert.equal(p.query.price_to, '300');
+});
+
+test('same search written differently yields the same canonical key', () => {
+  const a = parseSearchUrl('https://vinted.de/catalog?price_to=300&brand_ids[]=9&brand_ids[]=5&page=2');
+  const b = parseSearchUrl('https://www.vinted.de/catalog?brand_ids=5,9&price_to=300&order=relevance');
+  assert.equal(a.canonicalKey, b.canonicalKey);
+});
+
+test('rejects non-Vinted, item and filterless URLs', () => {
+  for (const bad of [
+    'https://example.com/catalog?a=1',
+    'https://www.vinted.de/items/12345-raf-simons',
+    'https://www.vinted.de/catalog',
+    'not a url',
+  ]) assert.throws(() => parseSearchUrl(bad), InvalidVintedUrl, bad);
+});
+
+/* ------------------------------ normalizing ----------------------------- */
+
+const rawItem = (id) => ({
+  id,
+  title: `Raf Simons Tee ${id}`,
+  brand_title: 'Raf Simons',
+  size_title: 'M',
+  status: 'Very good',
+  price: { amount: '120.0', currency_code: 'EUR' },
+  total_item_price: { amount: '133.50', currency_code: 'EUR' },
+  photo: { url: `https://img/${id}.jpg`, high_resolution: { timestamp: 1700000000 } },
+  user: { login: 'seller' },
+  url: `https://www.vinted.de/items/${id}`,
+});
+
+test('normalizes object prices and renders a caption', () => {
+  const item = normalizeItem(rawItem(1), 'www.vinted.de');
+  assert.equal(item.price.amount, 120);
+  const text = renderItem(item, 'Raf');
+  assert.match(text, /120 EUR/);
+  assert.match(text, /с защитой 133.50 EUR/);
+  assert.match(text, /Raf Simons/);
+});
+
+test('escapes HTML in listing titles', () => {
+  const item = normalizeItem({ ...rawItem(2), title: '<b>hack</b> & co' }, 'www.vinted.de');
+  assert.match(renderItem(item, null), /&lt;b&gt;hack&lt;\/b&gt; &amp; co/);
+});
+
+/* ------------------------------- monitor -------------------------------- */
+
+const parsed = parseSearchUrl('https://www.vinted.de/catalog?search_text=raf&price_to=300');
+store.upsertUser(1, 'owner');
+const mkSearch = (name, chatId, threadId) => {
+  const info = store.insertSearch.run({
+    user_id: 1, name, url: parsed.normalizedUrl, domain: parsed.domain,
+    canonical_key: parsed.canonicalKey, api_query: JSON.stringify(parsed.query),
+    dest_chat_id: chatId, dest_thread_id: threadId, next_run_at: 0, created_at: store.now(),
+  });
+  return store.getSearch.get(info.lastInsertRowid);
+};
+
+const sent = [];
+const monitor = new Monitor({ enqueue: (j) => sent.push(j), get size() { return 0; } });
+const items = (ids) => ids.map((id) => normalizeItem(rawItem(id), 'www.vinted.de'));
+
+let s1 = mkSearch('Raf', -100, 7);
+
+test('first poll only primes the baseline, sends nothing', () => {
+  monitor.handleResult(s1, items([10, 11, 12]));
+  assert.equal(sent.length, 0);
+  s1 = store.getSearch.get(s1.id);
+  assert.equal(s1.primed, 1);
+  assert.equal(s1.last_item_id, 12);
+});
+
+test('second poll sends only genuinely new listings, oldest first', () => {
+  monitor.handleResult(s1, items([14, 13, 12, 11]));
+  assert.deepEqual(sent.map((j) => j.item.id), [13, 14]);
+  assert.equal(sent[0].chatId, -100);
+  assert.equal(sent[0].threadId, 7);
+  assert.equal(sent[0].searchName, 'Raf');
+  s1 = store.getSearch.get(s1.id);
+});
+
+test('re-polling the same page never re-sends', () => {
+  sent.length = 0;
+  monitor.handleResult(s1, items([14, 13, 12]));
+  assert.equal(sent.length, 0);
+});
+
+test('a second search into the same topic does not duplicate the same item', () => {
+  sent.length = 0;
+  let s2 = mkSearch('Raf mirror', -100, 7);
+  monitor.handleResult(s2, items([14, 13]));       // prime
+  s2 = store.getSearch.get(s2.id);
+  monitor.handleResult(s2, items([20, 14, 13]));   // 20 is new for s2
+  assert.deepEqual(sent.map((j) => j.item.id), [20]);
+  sent.length = 0;
+  s1 = store.getSearch.get(s1.id);
+  monitor.handleResult(s1, items([20, 14]));       // 20 already went to -100:7
+  assert.equal(sent.length, 0, 'item 20 must not be delivered twice into the same topic');
+});
+
+test('a different topic of the same group still receives the item', () => {
+  sent.length = 0;
+  let s3 = mkSearch('Raf other topic', -100, 9);
+  monitor.handleResult(s3, items([14]));           // prime
+  s3 = store.getSearch.get(s3.id);
+  monitor.handleResult(s3, items([21, 14]));
+  assert.deepEqual(sent.map((j) => j.item.id), [21]);
+  assert.equal(sent[0].threadId, 9);
+});
+
+test('identical searches share one canonical key', () => {
+  assert.equal(store.stats().uniqueKeys, 1);
+  assert.equal(store.stats().active, 3);
+});
+
+test('disabled monitoring removes searches from the due queue', () => {
+  store.db.prepare('UPDATE searches SET next_run_at = 0').run();
+  assert.ok(store.dueSearches.all(store.now(), 10).length > 0);
+  store.setMonitoring.run(0, 1);
+  assert.equal(store.dueSearches.all(store.now(), 10).length, 0);
+  store.setMonitoring.run(1, 1);
+});
+
+test('plan expiry falls back to free', () => {
+  store.setPlan.run('pro', store.now() - 10, 1);
+  assert.equal(store.effectivePlan(store.getUser(1)), 'free');
+  store.setPlan.run('pro', store.now() + 86400, 1);
+  assert.equal(store.effectivePlan(store.getUser(1)), 'pro');
+});
+
+console.log(failures ? `\n${failures} test(s) failed` : '\nall tests passed');
+process.exit(failures ? 1 : 0);
