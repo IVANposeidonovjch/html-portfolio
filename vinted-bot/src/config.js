@@ -40,6 +40,16 @@ export const config = {
   startImage: process.env.START_IMAGE || '',
   helpImage: process.env.HELP_IMAGE || '',
 
+  // Delivery pacing. Bursts go out back to back up to `burst`, then each chat
+  // settles to its sustained rate; the global bucket keeps everything under
+  // Telegram's ceiling.
+  telegram: {
+    globalPerSec: num(process.env.TELEGRAM_GLOBAL_RPS, 25),
+    groupPerMinute: num(process.env.TELEGRAM_GROUP_PER_MIN, 20),
+    privatePerMinute: num(process.env.TELEGRAM_PRIVATE_PER_MIN, 60),
+    burst: num(process.env.TELEGRAM_BURST, 10),
+  },
+
   dedupePerDestination: bool(process.env.DEDUPE_PER_DESTINATION, true),
 
   payments: {

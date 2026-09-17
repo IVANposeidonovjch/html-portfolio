@@ -664,6 +664,120 @@ test('admin commands go only to the admin own chat, in their language', () => {
   });
 })();
 
+/* ------------------------------- delivery -------------------------------- */
+
+const { Sender } = await import('../src/monitor/sender.js');
+const { GrammyError } = await import('grammy');
+
+const stubApi = (timeline, fail = null) => ({
+  sendPhoto: async (chatId) => {
+    timeline.push({ chatId, at: Date.now() });
+    if (fail) return fail(timeline.length);
+    return { message_id: timeline.length };
+  },
+  sendMessage: async (chatId) => {
+    timeline.push({ chatId, at: Date.now() });
+    return { message_id: timeline.length };
+  },
+});
+
+const listing = (id) => ({
+  chatId: -100,
+  item: { id, title: `Item ${id}`, price: { amount: 10, currency: 'EUR' }, photoUrl: 'https://img/x.jpg', url: 'https://www.vinted.de/items/1' },
+  searchName: 'Raf',
+  lang: 'en',
+});
+
+const settled = (sender) =>
+  new Promise((resolve) => {
+    const tick = () => (sender.size === 0 ? resolve() : setTimeout(tick, 10));
+    tick();
+  });
+
+await (async () => {
+  // a burst the size of the allowance should not be spaced out at all
+  const burstLine = [];
+  const burst = new Sender(stubApi(burstLine), { burst: 10, groupPerMinute: 20, globalPerSec: 25 });
+  const started = Date.now();
+  for (let i = 0; i < 10; i++) burst.enqueue(listing(i));
+  await settled(burst);
+  const burstMs = Date.now() - started;
+
+  test('ten listings land in a moment, not over half a minute', () => {
+    assert.equal(burstLine.length, 10, 'all of them must be sent');
+    assert.ok(burstMs < 1000, `a burst inside the allowance took ${burstMs}ms`);
+  });
+
+  // past the allowance the chat has to settle to its sustained rate
+  const pacedLine = [];
+  const paced = new Sender(stubApi(pacedLine), { burst: 2, groupPerMinute: 60, globalPerSec: 25 });
+  for (let i = 0; i < 4; i++) paced.enqueue(listing(i));
+  await settled(paced);
+
+  test('past the burst it settles to the sustained rate', () => {
+    assert.equal(pacedLine.length, 4);
+    const gaps = pacedLine.slice(1).map((m, i) => m.at - pacedLine[i].at);
+    assert.ok(gaps[0] < 200, `the second of the burst waited ${gaps[0]}ms`);
+    assert.ok(gaps[1] > 800, `the third went out after only ${gaps[1]}ms — the budget was not enforced`);
+    assert.ok(gaps[2] > 800, `the fourth went out after only ${gaps[2]}ms`);
+  });
+
+  // a chat that has spent its budget must not hold up a different chat
+  const mixedLine = [];
+  const mixed = new Sender(stubApi(mixedLine), { burst: 1, groupPerMinute: 30, globalPerSec: 25 });
+  mixed.enqueue({ ...listing(1), chatId: -100 });
+  mixed.enqueue({ ...listing(2), chatId: -100 }); // this one has to wait ~2s
+  mixed.enqueue({ ...listing(3), chatId: -200 }); // this one should not
+  await new Promise((r) => setTimeout(r, 300));
+
+  test('a throttled chat does not hold up the others', () => {
+    const early = mixedLine.map((m) => m.chatId);
+    assert.deepEqual(early, [-100, -200], 'the second chat must be served while the first waits');
+  });
+
+  test('queue depth is reported per chat', () => {
+    assert.ok(mixed.size >= 1, 'the delayed listing is still queued');
+    assert.ok(mixed.pending.some((p) => p.startsWith('-100:')), `pending should name the chat: ${mixed.pending}`);
+  });
+
+  // Telegram pushing back must slow the whole chat, not just retry one message
+  const flakyLine = [];
+  let thrown = false;
+  const flaky = new Sender(
+    {
+      sendPhoto: async (chatId) => {
+        flakyLine.push({ chatId, at: Date.now() });
+        if (thrown) return { message_id: 1 };
+        thrown = true;
+        throw new GrammyError(
+          'Call to sendPhoto failed',
+          { ok: false, error_code: 429, description: 'Too Many Requests: retry after 1', parameters: { retry_after: 0 } },
+          'sendPhoto',
+          {},
+        );
+      },
+    },
+    { burst: 5, groupPerMinute: 60, globalPerSec: 25 },
+  );
+  flaky.enqueue(listing(1));
+  await settled(flaky);
+
+  test('a 429 pauses the chat and the message is retried', () => {
+    assert.equal(flakyLine.length, 2, 'the listing must be attempted again');
+    const waited = flakyLine[1].at - flakyLine[0].at;
+    assert.ok(waited > 900, `retry_after was not honoured — only ${waited}ms`);
+    assert.equal(flaky.lanes.get(-100).bucket.tokens, 0, 'the chat budget must be emptied, not just this one send');
+  });
+
+  // a private chat is allowed a higher sustained rate than a group
+  test('private chats are paced more generously than groups', () => {
+    const s = new Sender(stubApi([]), { groupPerMinute: 20, privatePerMinute: 60 });
+    const group = s.lanes.get(-100) ?? (s.enqueue({ ...listing(1), chatId: -100 }), s.lanes.get(-100));
+    const dm = s.lanes.get(4242) ?? (s.enqueue({ ...listing(2), chatId: 4242 }), s.lanes.get(4242));
+    assert.ok(dm.bucket.rate > group.bucket.rate, 'a DM should refill faster than a group');
+  });
+})();
+
 /* ------------------------------- pictures -------------------------------- */
 
 const imagesModule = await import('../src/bot/images.js');

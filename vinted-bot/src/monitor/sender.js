@@ -1,51 +1,116 @@
 import { GrammyError } from 'grammy';
 import { logger } from '../util/logger.js';
-import { sleep } from '../util/ratelimit.js';
+import { TokenBucket, sleep } from '../util/ratelimit.js';
 import { renderItem, itemKeyboard } from '../bot/format.js';
 
 /**
- * Telegram allows ~30 messages/second globally and ~20/minute into one group.
- * Everything the monitor produces goes through this queue so a burst of 50 new
- * listings never trips a 429 (and, when it does, we honour retry_after).
+ * Delivery pacing.
+ *
+ * Telegram's limits are a budget, not a metronome: roughly 30 messages/second
+ * across all chats, and about 20/minute into one group. A fixed gap per message
+ * spends that budget as slowly as the sustained rate allows, so ten listings
+ * found in one poll trickled out over half a minute — while the same ten fit
+ * inside the allowance comfortably if sent back to back.
+ *
+ * So each chat gets a token bucket instead: `burst` messages may leave
+ * immediately, and only once that is spent does the chat settle to its
+ * sustained rate. A private chat is given a higher rate than a group, because
+ * Telegram treats it more generously.
+ *
+ * Each chat also gets its own lane. With a single queue, one chat that had
+ * exhausted its budget held up everyone else's listings behind it.
  */
 export class Sender {
-  constructor(api, { globalPerSec = 20, perChatPerSec = 1 / 3 } = {}) {
+  constructor(api, {
+    globalPerSec = 25, // under Telegram's ~30/s ceiling, with room to spare
+    groupPerMinute = 20,
+    privatePerMinute = 60,
+    burst = 10,
+    idleLaneMs = 10 * 60_000,
+  } = {}) {
     this.api = api;
-    this.queue = [];
-    this.running = false;
-    this.globalGap = 1000 / globalPerSec;
-    this.chatGap = 1000 / perChatPerSec;
-    this.lastGlobal = 0;
-    this.lastByChat = new Map();
-    this.onFailure = null; // set by the app: (chatId, error) => void
+    this.global = new TokenBucket(globalPerSec, globalPerSec);
+    this.rates = { group: groupPerMinute / 60, private: privatePerMinute / 60 };
+    this.burst = burst;
+    this.idleLaneMs = idleLaneMs;
+    this.lanes = new Map(); // chat id -> { items, running, bucket, lastUsed }
+    this.onFailure = null; // set by the app: (job, error) => void
+    this.sent = 0;
+  }
+
+  /** Groups and channels carry the tighter limit; a private chat can take more. */
+  #laneFor(chatId) {
+    let lane = this.lanes.get(chatId);
+    if (!lane) {
+      const rate = chatId < 0 ? this.rates.group : this.rates.private;
+      lane = { items: [], inFlight: 0, running: false, bucket: new TokenBucket(rate, this.burst), lastUsed: 0 };
+      this.lanes.set(chatId, lane);
+    }
+    lane.lastUsed = Date.now();
+    return lane;
+  }
+
+  /**
+   * Forget chats that have been quiet long enough for their bucket to have
+   * refilled anyway — dropping a lane any earlier would hand that chat a fresh
+   * full burst and walk straight into a 429.
+   */
+  #sweep() {
+    if (this.lanes.size < 200) return;
+    const cutoff = Date.now() - this.idleLaneMs;
+    for (const [chatId, lane] of this.lanes) {
+      if (!lane.items.length && !lane.inFlight && !lane.running && lane.lastUsed < cutoff) {
+        this.lanes.delete(chatId);
+      }
+    }
   }
 
   enqueue(job) {
-    this.queue.push(job);
-    if (!this.running) this.#drain();
+    const lane = this.#laneFor(job.chatId);
+    lane.items.push(job);
+    this.#sweep();
+    if (!lane.running) this.#drain(job.chatId, lane);
   }
 
+  /**
+   * Listings not yet delivered — queued plus the one currently waiting for its
+   * chat's budget. Counting only the queue would report an empty backlog while
+   * a message was still sitting in front of a closed gate.
+   */
   get size() {
-    return this.queue.length;
+    let n = 0;
+    for (const lane of this.lanes.values()) n += lane.items.length + lane.inFlight;
+    return n;
   }
 
-  async #drain() {
-    this.running = true;
-    while (this.queue.length) {
-      const job = this.queue.shift();
-      const wait = Math.max(
-        this.lastGlobal + this.globalGap - Date.now(),
-        (this.lastByChat.get(job.chatId) ?? 0) + this.chatGap - Date.now(),
-      );
-      if (wait > 0) await sleep(wait);
-      this.lastGlobal = Date.now();
-      this.lastByChat.set(job.chatId, Date.now());
-      await this.#send(job);
+  /** Backlog per chat, for /stats. */
+  get pending() {
+    return [...this.lanes.entries()]
+      .filter(([, lane]) => lane.items.length + lane.inFlight)
+      .map(([chatId, lane]) => `${chatId}:${lane.items.length + lane.inFlight}`);
+  }
+
+  async #drain(chatId, lane) {
+    lane.running = true;
+    try {
+      while (lane.items.length) {
+        const job = lane.items.shift();
+        lane.inFlight = 1;
+        try {
+          await this.global.take(); // the ceiling across every chat
+          await lane.bucket.take(); // this chat's own budget
+          lane.lastUsed = Date.now();
+          await this.#send(job, lane);
+        } finally {
+          lane.inFlight = 0;
+        }
+      }
+    } finally {
+      lane.running = false;
     }
-    this.running = false;
   }
 
-  async #send(job, attempt = 0) {
+  async #send(job, lane, attempt = 0) {
     const { chatId, threadId, item, searchName, lang } = job;
     const caption = renderItem(item, searchName, lang);
     const opts = {
@@ -59,17 +124,23 @@ export class Sender {
       } else {
         await this.api.sendMessage(chatId, caption, { ...opts, link_preview_options: { is_disabled: true } });
       }
+      this.sent++;
       job.onSent?.();
     } catch (err) {
       if (err instanceof GrammyError) {
-        const retryAfter = err.parameters?.retry_after;
-        if (retryAfter && attempt < 3) {
+        // `retry_after: 0` is a legal answer, and a plain 429 may carry no
+        // parameter at all — neither may be read as "do not retry".
+        const retryAfter = err.parameters?.retry_after ?? (err.error_code === 429 ? 1 : undefined);
+        if (retryAfter !== undefined && attempt < 3) {
+          // Telegram says we were too quick: empty this chat's bucket so the
+          // pause applies to everything queued behind this message too.
+          if (lane) lane.bucket.tokens = 0;
           await sleep((retryAfter + 1) * 1000);
-          return this.#send(job, attempt + 1);
+          return this.#send(job, lane, attempt + 1);
         }
         // Telegram cannot fetch the remote photo -> fall back to a text message
         if (attempt === 0 && item.photoUrl && /wrong file identifier|failed to get http url content|photo/i.test(err.description)) {
-          return this.#send({ ...job, item: { ...item, photoUrl: null } }, attempt + 1);
+          return this.#send({ ...job, item: { ...item, photoUrl: null } }, lane, attempt + 1);
         }
         logger.warn(`send failed chat=${chatId} item=${item.id}: ${err.description}`);
         this.onFailure?.(job, err);

@@ -14,7 +14,7 @@ if (!config.botToken) {
 }
 
 const bot = createBot();
-const sender = new Sender(bot.api);
+const sender = new Sender(bot.api, config.telegram);
 const monitor = new Monitor(sender);
 
 sender.onFailure = (job, err) => {
