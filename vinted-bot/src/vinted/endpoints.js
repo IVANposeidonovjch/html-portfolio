@@ -3,15 +3,21 @@
  *
  * Until ~September 2026 the web app called `https://www.vinted.xx/api/v2/catalog/items`.
  * That path now answers 404 with a generic HTML page even for a freshly
- * bootstrapped session — the endpoint moved, it is not an auth failure.
- * Independent reports (Giglium/vinted_scraper#214, #215, 15.09.2026) point at a
- * dedicated API host: `https://api.vinted.xx/svc-catalogue/items`.
+ * bootstrapped session: the endpoint moved, it was not an auth failure.
  *
- * Those reports are UNVERIFIED — nobody confirmed the parameter shape or the
- * headers. So instead of hardcoding one guess, the client walks this list at
- * runtime, keeps whichever variant actually returns items, and re-walks it the
- * next time that variant 404s. `tools/probe.mjs` runs the same matrix against
- * the real network and prints which entry wins; pin it with VINTED_API_STRATEGY.
+ * MEASURED 17.09.2026 (tools/probe-standalone.mjs, www.vinted.de, residential
+ * IP): `https://api.vinted.de/svc-catalogue/items` returns real listings with
+ * the page's own filter names and a plain header set. The same call from a
+ * datacenter IP answers 403 — the proxy is not optional any more.
+ *
+ * The list stays a list: the client walks it, keeps whichever variant returns
+ * items, and re-walks when that one starts failing, so the next move Vinted
+ * makes costs a probe run rather than a rewrite. Pin one with
+ * VINTED_API_STRATEGY.
+ *
+ * `headers` says which header set the variant was confirmed with. The client
+ * tries that one first and the other as a fallback, because sending headers a
+ * confirmed-working call did not send is its own way to get rejected.
  */
 
 const bare = (domain) => domain.replace(/^www\./, '');
@@ -60,22 +66,26 @@ export function extractItems(body) {
 export const STRATEGIES = [
   {
     name: 'svc-catalogue',
-    note: 'reported replacement, plain filters',
+    note: 'confirmed 17.09.2026 on .de via residential IP',
+    headers: 'plain',
     url: build((d) => `https://api.${bare(d)}/svc-catalogue/items`, passthrough),
   },
   {
     name: 'svc-catalogue-attrs',
-    note: 'reported replacement, attribute_ids[...] filters',
+    note: 'same host, attribute_ids[...] filters',
+    headers: 'plain',
     url: build((d) => `https://api.${bare(d)}/svc-catalogue/items`, attributeIds),
   },
   {
     name: 'svc-catalogue-www',
     note: 'api.www.<domain> host variant reported for .com',
+    headers: 'plain',
     url: build((d) => `https://api.www.${bare(d)}/svc-catalogue/items`, passthrough),
   },
   {
     name: 'legacy-catalog',
-    note: 'pre-September-2026 endpoint, kept as fallback',
+    note: 'pre-September-2026 endpoint, 404 since the move',
+    headers: 'full',
     url: build((d) => `https://${d}/api/v2/catalog/items`, passthrough),
   },
 ];

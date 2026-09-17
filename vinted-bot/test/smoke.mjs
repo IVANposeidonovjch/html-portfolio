@@ -17,6 +17,7 @@ const store = await import('../src/db/index.js');
 const { Monitor } = await import('../src/monitor/scheduler.js');
 const { renderItem } = await import('../src/bot/format.js');
 const { STRATEGIES, extractItems, strategyByName } = await import('../src/vinted/endpoints.js');
+const { candidatesFor } = await import('../src/vinted/client.js');
 const { normalizeItem } = await import('../src/vinted/normalize.js');
 
 let failures = 0;
@@ -95,6 +96,18 @@ test('item arrays are found under every shape seen so far', () => {
   assert.equal(extractItems(null), null);
 });
 
+test('the confirmed variant is tried first, with the header set it was confirmed with', () => {
+  const pairs = candidatesFor('www.vinted.de');
+  assert.equal(pairs[0].strategy.name, 'svc-catalogue');
+  assert.equal(pairs[0].headerKind, 'plain');
+  // every variant also gets a shot with the other header set
+  assert.equal(pairs.length, STRATEGIES.length * 2);
+  assert.ok(
+    pairs.some((p) => p.strategy.name === 'svc-catalogue' && p.headerKind === 'full'),
+    'the alternate header set must stay reachable as a fallback',
+  );
+});
+
 /* ------------------------------ normalizing ----------------------------- */
 
 const rawItem = (id) => ({
@@ -117,6 +130,45 @@ test('normalizes object prices and renders a caption', () => {
   assert.match(text, /120 EUR/);
   assert.match(text, /с защитой 133.50 EUR/);
   assert.match(text, /Raf Simons/);
+});
+
+test('reads the svc-catalogue item shape (item_box, no flat brand/size)', () => {
+  const item = normalizeItem(
+    {
+      id: 77,
+      title: 'Raf Simons bomber',
+      item_box: { first_line: 'Raf Simons', second_line: 'L', third_line: 'Good' },
+      price: { amount: '240.0', currency_code: 'EUR' },
+      total_item_price: { amount: '261.20', currency_code: 'EUR' },
+      photo: { url: 'https://img/77.jpg', high_resolution: { timestamp: 1700000000 } },
+      user: { login: 'seller77' },
+      url: 'https://www.vinted.de/items/77',
+    },
+    'www.vinted.de',
+  );
+  assert.equal(item.brand, 'Raf Simons');
+  assert.equal(item.size, 'L');
+  assert.equal(item.condition, 'Good');
+  assert.equal(item.price.amount, 240);
+  assert.equal(item.totalPrice.amount, 261.2);
+  assert.equal(item.photoUrl, 'https://img/77.jpg');
+  assert.match(renderItem(item, 'Raf'), /240 EUR/);
+});
+
+test('flat fields still win over item_box when both are present', () => {
+  const item = normalizeItem(
+    { id: 78, title: 't', brand_title: 'Helmut Lang', size_title: 'M', item_box: { first_line: 'WRONG', second_line: 'XL' } },
+    'www.vinted.de',
+  );
+  assert.equal(item.brand, 'Helmut Lang');
+  assert.equal(item.size, 'M');
+});
+
+test('a listing with no id is dropped, a sparse one still renders', () => {
+  assert.equal(normalizeItem({ title: 'no id' }, 'www.vinted.de'), null);
+  const sparse = normalizeItem({ id: 79, title: 'bare' }, 'www.vinted.de');
+  assert.equal(sparse.url, 'https://www.vinted.de/items/79');
+  assert.doesNotThrow(() => renderItem(sparse, null));
 });
 
 test('escapes HTML in listing titles', () => {

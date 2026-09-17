@@ -81,19 +81,26 @@ src/
 Технические ответы (скорость, прокси, стоимость 100/1 000/10 000 ссылок,
 цена MVP) — в [`docs/TECH.md`](docs/TECH.md).
 
-## Если каталог отвечает 404
+## Эндпоинт каталога и прокси
 
-Vinted переносит свой внутренний эндпоинт каталога (сентябрь 2026: `/api/v2/catalog/items`
-начал отдавать HTML-404 даже при живой сессии). Поэтому адрес больше не зашит в код:
+С 17.09.2026 каталог живёт по адресу `https://api.vinted.<tld>/svc-catalogue/items`
+(старый `/api/v2/catalog/items` отдаёт HTML-404 даже при живой сессии). Проверено на
+`.de` с резидентного IP. **Резидентный прокси обязателен**: тот же запрос с
+дата-центрового IP получает 403, поэтому `PROXIES=` в `.env` — не оптимизация, а
+условие работы. Адрес при этом не зашит в код:
 `src/vinted/endpoints.js` держит список известных вариантов, клиент на старте
 перебирает их, запоминает тот, что вернул объявления, и перебирает заново, если он
 однажды отвалится. В логах это видно строкой `vinted endpoint for www.vinted.de: …`,
 в `/stats` — колонкой endpoint.
 
-Когда ни один вариант не отвечает, снимаем актуальный адрес с боевого IP:
+Когда ни один вариант не отвечает, снимаем актуальный адрес с боевого IP. Проба
+есть в двух видах: `tools/probe.mjs` (из репозитория, использует undici) и
+`tools/probe-standalone.mjs` — один файл без зависимостей, его можно просто
+скопировать на сервер, где нет ни `node_modules`, ни git:
 
 ```bash
-PROXY=http://user:pass@host:port node tools/probe.mjs "https://www.vinted.de/catalog?search_text=raf+simons"
+PROXY=http://user:pass@host:port node tools/probe-standalone.mjs --selftest   # виден ли резидентный IP
+PROXY=http://user:pass@host:port node tools/probe-standalone.mjs "https://www.vinted.de/catalog?search_text=raf+simons"
 ```
 
 Скрипт пробует все варианты × два набора заголовков, показывает статус, тип контента,

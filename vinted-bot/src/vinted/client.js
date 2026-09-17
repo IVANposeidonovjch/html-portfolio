@@ -49,13 +49,21 @@ class Session {
     };
   }
 
-  /** Headers the web app sends alongside cookies on catalog calls. */
-  apiHeaders() {
+  /**
+   * Two header sets. `plain` is what the confirmed working call actually sent;
+   * `full` adds the origin / anon-id / CSRF trio the old endpoint wanted.
+   * Which one a variant needs is measured, not assumed — see endpoints.js.
+   */
+  apiHeaders(kind = 'plain') {
+    const base = {
+      accept: 'application/json, text/plain, */*',
+      referer: `https://${this.domain}/catalog`,
+    };
+    if (kind === 'plain') return this.headers(base);
     const anonId = this.cookies.get('anon_id');
     return this.headers({
-      accept: 'application/json, text/plain, */*',
+      ...base,
       'x-requested-with': 'XMLHttpRequest',
-      referer: `https://${this.domain}/catalog`,
       origin: `https://${this.domain}`,
       ...(anonId ? { 'x-anon-id': anonId } : {}),
       ...(this.csrfToken ? { 'x-csrf-token': this.csrfToken } : {}),
@@ -101,7 +109,7 @@ export class VintedError extends Error {
 
 const buckets = new Map(); // domain -> TokenBucket
 const sessions = new Map(); // `${domain}|${proxy}` -> Session
-const resolved = new Map(); // domain -> strategy that last returned items
+const resolved = new Map(); // domain -> { strategy, headerKind } that last returned items
 let proxyCursor = 0;
 
 function bucketFor(domain) {
@@ -126,23 +134,32 @@ function sessionFor(domain) {
   return usable[proxyCursor++ % usable.length];
 }
 
-/** Strategies to try for a domain, best known first. */
+/** (strategy, header set) pairs to try for a domain, best known first. */
 export function candidatesFor(domain) {
+  const flip = (kind) => (kind === 'plain' ? 'full' : 'plain');
   const pinned = config.vinted.strategy && strategyByName(config.vinted.strategy);
-  if (pinned) return [pinned];
+  const pairs = [];
+  for (const strategy of pinned ? [pinned] : STRATEGIES) {
+    const preferred = strategy.headers || 'plain';
+    pairs.push({ strategy, headerKind: preferred }, { strategy, headerKind: flip(preferred) });
+  }
   const known = resolved.get(domain);
-  return known ? [known, ...STRATEGIES.filter((s) => s !== known)] : [...STRATEGIES];
+  if (!known) return pairs;
+  return [
+    known,
+    ...pairs.filter((p) => !(p.strategy === known.strategy && p.headerKind === known.headerKind)),
+  ];
 }
 
 const isHtml = (headers) => /text\/html/i.test(headers['content-type'] || '');
 
 /** One HTTP call against one strategy. Returns items, or an explanatory error. */
-async function tryStrategy(session, strategy, domain, query, perPage) {
+async function tryStrategy(session, { strategy, headerKind }, domain, query, perPage) {
   const url = strategy.url(domain, query, { perPage });
   const res = await request(url, {
     method: 'GET',
     dispatcher: session.dispatcher,
-    headers: session.apiHeaders(),
+    headers: session.apiHeaders(headerKind),
   });
   session.storeCookies(res.headers);
 
@@ -152,7 +169,7 @@ async function tryStrategy(session, strategy, domain, query, perPage) {
     if (items) return { items, url };
     return {
       error: new VintedError(
-        `${strategy.name}: 200 but no item array (keys: ${Object.keys(body || {}).join(',') || 'none'})`,
+        `${strategy.name}/${headerKind}: 200 but no item array (keys: ${Object.keys(body || {}).join(',') || 'none'})`,
         200,
         { endpointGone: true },
       ),
@@ -166,14 +183,17 @@ async function tryStrategy(session, strategy, domain, query, perPage) {
   if (res.statusCode === 404 || isHtml(res.headers)) {
     return {
       error: new VintedError(
-        `${strategy.name}: эндпоинт не отвечает JSON (HTTP ${res.statusCode}${isHtml(res.headers) ? ', HTML-страница' : ''}) — путь перенесён`,
+        `${strategy.name}/${headerKind}: не JSON (HTTP ${res.statusCode}${isHtml(res.headers) ? ', HTML' : ''}) — путь перенесён`,
         res.statusCode,
         { endpointGone: true },
       ),
       url,
     };
   }
-  return { error: new VintedError(`${strategy.name}: HTTP ${res.statusCode}`, res.statusCode), url };
+  return {
+    error: new VintedError(`${strategy.name}/${headerKind}: HTTP ${res.statusCode}`, res.statusCode),
+    url,
+  };
 }
 
 /**
@@ -188,24 +208,38 @@ export async function fetchCatalog(domain, query, { perPage = config.vinted.perP
     await session.bootstrap(attempt > 0);
 
     const gone = [];
-    for (const strategy of candidatesFor(domain)) {
-      const { items, error, url } = await tryStrategy(session, strategy, domain, query, perPage);
+    let sawForbidden = false;
+    for (const pair of candidatesFor(domain)) {
+      const { strategy, headerKind } = pair;
+      const { items, error, url } = await tryStrategy(session, pair, domain, query, perPage);
 
       if (items) {
-        if (resolved.get(domain) !== strategy) {
-          resolved.set(domain, strategy);
-          logger.info(`vinted endpoint for ${domain}: ${strategy.name} (${strategy.note}) — ${url}`);
+        const known = resolved.get(domain);
+        if (known?.strategy !== strategy || known?.headerKind !== headerKind) {
+          resolved.set(domain, pair);
+          logger.info(
+            `vinted endpoint for ${domain}: ${strategy.name} headers=${headerKind} (${strategy.note}) — ${url}`,
+          );
         }
         return items;
       }
 
       // Auth problems mean the session, not the endpoint: re-bootstrap and retry.
       if (error.status === 401 || error.status === 403) {
+        sawForbidden = true;
         session.cookies.clear();
         session.csrfToken = null;
         if (attempt === 2) {
           session.blockedUntil = Date.now() + 60_000;
-          throw new VintedError(`Vinted отклонил запрос (${error.status})`, error.status);
+          // A datacenter IP gets 403 on the live endpoint no matter how good the
+          // session is, so say that instead of blaming the cookies.
+          throw new VintedError(
+            session.proxy
+              ? `Vinted отклонил запрос (${error.status}) через ${session.proxy}`
+              : `Vinted отклонил запрос (${error.status}) с прямого IP сервера. ` +
+                'Каталог отвечает только с резидентного IP — пропиши PROXIES в .env.',
+            error.status,
+          );
         }
         await sleep(500 * (attempt + 1));
         break; // back to the outer loop for a fresh session
@@ -222,14 +256,16 @@ export async function fetchCatalog(domain, query, { perPage = config.vinted.perP
       }
 
       gone.push(error.message);
-      if (resolved.get(domain) === strategy) resolved.delete(domain); // it moved again
+      const known = resolved.get(domain);
+      if (known?.strategy === strategy && known?.headerKind === headerKind) resolved.delete(domain);
       await bucketFor(domain).take(); // stay polite while walking candidates
     }
 
     if (gone.length) {
       throw new VintedError(
-        `Ни один известный эндпоинт каталога не отвечает. Проверено: ${gone.join(' | ')}. ` +
-          'Запусти tools/probe.mjs на боевом IP, чтобы снять актуальный адрес.',
+        `Ни один известный эндпоинт каталога не отвечает. Проверено: ${gone.join(' | ')}.` +
+          (sawForbidden && !session.proxy ? ' Часть ответов — 403 с прямого IP: нужен резидентный прокси.' : '') +
+          ' Запусти tools/probe-standalone.mjs на боевом IP, чтобы снять актуальный адрес.',
         404,
         { endpointGone: true },
       );
@@ -244,7 +280,9 @@ export function poolStatus() {
     proxy: s.proxy ?? 'direct',
     cookies: s.cookies.size,
     csrf: !!s.csrfToken,
-    endpoint: resolved.get(s.domain)?.name ?? 'не определён',
+    endpoint: resolved.get(s.domain)
+      ? `${resolved.get(s.domain).strategy.name}/${resolved.get(s.domain).headerKind}`
+      : 'не определён',
     blockedFor: Math.max(0, Math.round((s.blockedUntil - Date.now()) / 1000)),
   }));
 }
