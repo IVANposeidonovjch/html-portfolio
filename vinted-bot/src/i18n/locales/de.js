@@ -21,14 +21,7 @@ export const de = {
 3. „➕ Link hinzufügen“ → URL schicken → benennen (<i>Raf</i>).
 4. Ziel wählen: hier, eine Gruppe oder ein Thema.
 
-🔔 <b>So sieht ein Treffer aus</b>
-<i>[Foto des Artikels]</i>
-📌 <b>Raf Simons bomber</b>
-💰 Preis : 240€
-🏷 Marke : Raf Simons
-📏 Größe : L
-#Raf
-[ URL ]
+{example}
 
 🧵 <b>Gruppen und Themen</b>
 Bot als Admin in die Gruppe holen und dort <code>/bind</code> schreiben. Themen aktivieren — der Bot legt pro Suche selbst eins an: Raf, Helmut, Bags an einem Ort.
@@ -38,6 +31,17 @@ Der erste Durchlauf merkt sich nur den Bestand. Eine Anzeige landet einmal im Th
 
 ⚙️ <b>Einstellungen</b> — in den Buttons unten: Tarif, Sprache, deine Chats.
 ⌨️ <b>Befehle</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Alles andere per Button.`,
+
+  // the example section: a mockup when there is no picture, a pointer when there is
+  'help.example': `🔔 <b>So sieht ein Treffer aus</b>
+<i>[Foto des Artikels]</i>
+📌 <b>Raf Simons bomber</b>
+💰 Preis : 240€
+🏷 Marke : Raf Simons
+📏 Größe : L
+#Raf
+[ URL ]`,
+  'help.exampleHint': '🔔 <b>So sieht ein Treffer aus</b> ⬇️',
 
   'add.askUrl': `Schick mir eine Vinted-Such-URL.
 

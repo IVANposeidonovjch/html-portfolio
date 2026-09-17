@@ -21,14 +21,7 @@ export const en = {
 3. "➕ Add link" → send the URL → name it (<i>Raf</i>).
 4. Pick where it lands: here, a group, or a topic.
 
-🔔 <b>What an alert looks like</b>
-<i>[item photo]</i>
-📌 <b>Raf Simons bomber</b>
-💰 Price : 240€
-🏷 Brand : Raf Simons
-📏 Size : L
-#Raf
-[ URL ]
+{example}
 
 🧵 <b>Groups and topics</b>
 Add the bot to a group as admin and type <code>/bind</code> there. Turn on Topics and it creates one per search by itself: Raf, Helmut, Bags, all in one place.
@@ -38,6 +31,17 @@ The first pass only records what is already listed. A listing reaches a topic on
 
 ⚙️ <b>Settings</b> — in the buttons below: plan, language, your chats.
 ⌨️ <b>Commands</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Everything else is a button.`,
+
+  // the example section: a mockup when there is no picture, a pointer when there is
+  'help.example': `🔔 <b>What an alert looks like</b>
+<i>[item photo]</i>
+📌 <b>Raf Simons bomber</b>
+💰 Price : 240€
+🏷 Brand : Raf Simons
+📏 Size : L
+#Raf
+[ URL ]`,
+  'help.exampleHint': '🔔 <b>Here is what an alert looks like</b> ⬇️',
 
   'add.askUrl': `Send a Vinted search URL.
 

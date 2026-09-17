@@ -5,6 +5,7 @@ import { LANGS, isLang, resolveLang, t } from '../i18n/index.js';
 import { logger } from '../util/logger.js';
 import { InvalidVintedUrl, parseSearchUrl } from '../vinted/url.js';
 import { DEMO_SEARCH, demoItem, itemKeyboard, renderItem } from './format.js';
+import { helpText } from './help.js';
 import { adoptPhoto, forgetImage, imageFor } from './images.js';
 import {
   backRow, cancelKb, chatsKb, confirmDeleteKb, destinationKb, helpKb, langKb, mainMenu, menuOnlyKb,
@@ -161,7 +162,9 @@ export function createBot() {
   /** Help doubles as the second level: plan, language and chats live here. */
   async function showHelp(ctx) {
     const { lang } = who(ctx);
-    await render(ctx, t(lang, 'help.text'), {
+    const demo = imageFor('help');
+
+    await render(ctx, helpText(lang, !!demo), {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
       reply_markup: helpKb(lang),
@@ -170,7 +173,6 @@ export function createBot() {
     // With a picture configured, the example stops being a description of an
     // alert and becomes one: same photo-plus-caption shape, same renderItem
     // output, same URL button.
-    const demo = imageFor('help');
     if (!demo) return;
     const item = demoItem();
     try {

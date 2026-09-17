@@ -18,6 +18,7 @@ const { parseSearchUrl, InvalidVintedUrl } = await import('../src/vinted/url.js'
 const store = await import('../src/db/index.js');
 const { Monitor } = await import('../src/monitor/scheduler.js');
 const { renderItem, itemKeyboard, demoItem, DEMO_SEARCH } = await import('../src/bot/format.js');
+const { helpText } = await import('../src/bot/help.js');
 const { LOCALES, allLabels, resolveLang, t } = await import('../src/i18n/index.js');
 const { STRATEGIES, extractItems, strategyByName, orderedStrategies, filtersLookHonoured } =
   await import('../src/vinted/endpoints.js');
@@ -254,10 +255,29 @@ test('the help example is exactly what the bot really sends', () => {
   for (const lang of Object.keys(LOCALES)) {
     const rendered = renderItem(demoItem(), DEMO_SEARCH, lang);
     assert.ok(
-      LOCALES[lang]['help.text'].includes(rendered),
+      helpText(lang, false).includes(rendered),
       `${lang}: help shows an alert the code no longer produces\n--- code ---\n${rendered}`,
     );
-    assert.match(LOCALES[lang]['help.text'], /\[ URL \]/, `${lang}: the URL button is missing`);
+    assert.match(helpText(lang, false), /\[ URL \]/, `${lang}: the URL button is missing`);
+  }
+});
+
+test('with a picture, help points at it instead of repeating it in text', () => {
+  for (const lang of Object.keys(LOCALES)) {
+    const withPicture = helpText(lang, true);
+    const written = helpText(lang, false);
+    assert.ok(!withPicture.includes('[ URL ]'), `${lang}: the text mockup is duplicated under the photo`);
+    assert.ok(!withPicture.includes(renderItem(demoItem(), DEMO_SEARCH, lang)));
+    assert.match(withPicture, /⬇️/, `${lang}: nothing points down at the photo`);
+    assert.ok(
+      withPicture.length < written.length,
+      `${lang}: the picture version should be the shorter one`,
+    );
+    // everything that is not the example must survive both ways
+    for (const marker of ['🧵', '🛡', '⚙️', '⌨️']) {
+      assert.ok(withPicture.includes(marker), `${lang}: section ${marker} lost`);
+      assert.ok(written.includes(marker), `${lang}: section ${marker} lost`);
+    }
   }
 });
 
@@ -786,20 +806,23 @@ await (async () => {
     for (const [lang, dict] of Object.entries(LOCALES)) {
       // /start may travel as a photo caption, capped at 1024 characters
       assert.ok(dict['start.text'].length <= 1024, `${lang}: start.text too long for a caption`);
-      assert.ok(dict['help.text'].length <= 4096, `${lang}: help.text exceeds a message`);
-      // the tags we use must be the ones Telegram's HTML mode knows
-      const tags = [...dict['help.text'].matchAll(/<\/?([a-z]+)/g)].map((m) => m[1]);
-      for (const tag of new Set(tags)) {
-        assert.ok(['b', 'i', 'u', 's', 'code', 'pre', 'a'].includes(tag), `${lang}: <${tag}> is not allowed`);
+      for (const variant of [helpText(lang, false), helpText(lang, true)]) {
+        assert.ok(variant.length <= 4096, `${lang}: help exceeds a message`);
+        assert.ok(!variant.includes('{example}'), `${lang}: the placeholder was left unfilled`);
+        // the tags we use must be the ones Telegram's HTML mode knows
+        const tags = [...variant.matchAll(/<\/?([a-z]+)/g)].map((m) => m[1]);
+        for (const tag of new Set(tags)) {
+          assert.ok(['b', 'i', 'u', 's', 'code', 'pre', 'a'].includes(tag), `${lang}: <${tag}> is not allowed`);
+        }
       }
     }
   });
 
   test('help reads as sections, not a paragraph dump', () => {
     for (const [lang, dict] of Object.entries(LOCALES)) {
-      const headers = dict['help.text'].split('\n').filter((l) => /^[^\w\s].*<b>/.test(l));
+      const headers = helpText(lang, false).split('\n').filter((l) => /^[^\w\s].*<b>/.test(l));
       assert.ok(headers.length >= 4, `${lang}: only ${headers.length} emoji section headers`);
-      assert.match(dict['help.text'], /\[ URL \]/, `${lang}: the example alert is missing`);
+      assert.match(helpText(lang, false), /\[ URL \]/, `${lang}: the example alert is missing`);
     }
   });
 
@@ -922,15 +945,18 @@ await (async () => {
       'the caption must be produced by renderItem, not written by hand',
     );
     assert.equal(photo.payload.reply_markup.inline_keyboard[0][0].text, 'URL');
-    assert.ok(
-      helpWithPhoto.some((c) => c.method === 'editMessageText'),
-      'and the help text itself is still shown',
-    );
+    const edit = helpWithPhoto.find((c) => c.method === 'editMessageText');
+    assert.ok(edit, 'and the help text itself is still shown');
+    assert.equal(edit.payload.text, helpText('ru', true), 'in its pointer form, not the mockup');
+    assert.ok(!edit.payload.text.includes('[ URL ]'), 'the example must not be told twice');
   });
 
   const helpNoPhoto = await drive(pressUpdate('m:help', UID), UID);
-  test('without a picture help stays text only', () => {
+  test('without a picture help keeps the written example', () => {
     assert.ok(!helpNoPhoto.some((c) => c.method === 'sendPhoto'));
+    const edit = helpNoPhoto.find((c) => c.method === 'editMessageText');
+    assert.equal(edit.payload.text, helpText('ru', false));
+    assert.match(edit.payload.text, /\[ URL \]/, 'the mockup is the fallback and must stay');
   });
 
   const typedLabel = await drive(textUpdate(LOCALES.ru['btn.add'], UID), UID);

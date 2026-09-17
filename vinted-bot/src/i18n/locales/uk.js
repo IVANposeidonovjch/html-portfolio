@@ -21,14 +21,7 @@ export const uk = {
 3. «➕ Додати посилання» → надішли URL → назви його (<i>Raf</i>).
 4. Обери, куди слати: сюди, у групу або в тему.
 
-🔔 <b>Так виглядає знахідка</b>
-<i>[фото речі]</i>
-📌 <b>Raf Simons bomber</b>
-💰 Ціна : 240€
-🏷 Бренд : Raf Simons
-📏 Розмір : L
-#Raf
-[ URL ]
+{example}
 
 🧵 <b>Групи та теми</b>
 Додай бота адміном у групу і напиши там <code>/bind</code>. Увімкнеш «Теми» — бот сам заведе тему під кожен пошук: Raf, Helmut, Bags в одному місці.
@@ -38,6 +31,17 @@ export const uk = {
 
 ⚙️ <b>Налаштування</b> — кнопками нижче: тариф, мова, список чатів.
 ⌨️ <b>Команди</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Решта кнопками.`,
+
+  // the example section: a mockup when there is no picture, a pointer when there is
+  'help.example': `🔔 <b>Так виглядає знахідка</b>
+<i>[фото речі]</i>
+📌 <b>Raf Simons bomber</b>
+💰 Ціна : 240€
+🏷 Бренд : Raf Simons
+📏 Розмір : L
+#Raf
+[ URL ]`,
+  'help.exampleHint': '🔔 <b>Так виглядає знахідка</b> ⬇️',
 
   'add.askUrl': `Надішли посилання на пошук Vinted.
 
