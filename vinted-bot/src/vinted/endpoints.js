@@ -26,8 +26,9 @@ const bare = (domain) => domain.replace(/^www\./, '');
 const passthrough = (query) => ({ ...query });
 
 /**
- * Hypothesis for the new service: the *_ids filters are folded into an
- * attribute_ids[...] namespace. Verified by the probe, not by faith.
+ * Fallback shape: the *_ids filters folded into an attribute_ids[...] namespace.
+ * The probe showed the plain names work on .de, so this is kept for the regions
+ * (or the next release) where they might not.
  */
 const ATTRIBUTE_MAP = {
   catalog_ids: 'catalog',

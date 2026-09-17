@@ -16,7 +16,7 @@ Vinted search URL → Telegram group → Topic → новое объявлени
 ```bash
 cp .env.example .env         # вписать BOT_TOKEN от @BotFather и ADMIN_IDS
 npm install
-npm test                     # 13 офлайн-тестов логики
+npm test                     # 22 офлайн-теста логики
 npm start
 ```
 
@@ -56,12 +56,14 @@ src/
   db/                   SQLite (WAL): users, chats, topics, searches, дедуп, кэш
   vinted/
     url.js              search URL → канонические параметры каталога
+    endpoints.js        известные адреса каталога, определяются в рантайме
     client.js           сессии-cookie, пул прокси, token bucket, backoff
     normalize.js        единая форма объявления
   monitor/
     scheduler.js        очередь по next_run_at, общий фетч, дедуп, priming
     sender.js           троттлинг Telegram (20/мин в чат), ретраи 429
   bot/                  меню, мастер добавления, тарифы, платежи ⭐
+tools/                  probe.mjs и probe-standalone.mjs — снять живой контракт API
 ```
 
 Ключевые решения:

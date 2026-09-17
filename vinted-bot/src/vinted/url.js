@@ -1,9 +1,12 @@
 /**
  * Turns a Vinted *search page* URL (the one a user copies from the browser)
- * into the parameters of Vinted's own catalog API, which the web app itself calls.
+ * into the parameters of Vinted's own catalog service, which the web app calls.
  *
  *   https://www.vinted.de/catalog?search_text=raf+simons&brand_ids[]=123&price_to=200
- *   -> GET https://www.vinted.de/api/v2/catalog/items?search_text=raf+simons&brand_ids=123&price_to=200
+ *   -> GET https://api.vinted.de/svc-catalogue/items?search_text=raf+simons&brand_ids=123&price_to=200
+ *
+ * The host and path come from endpoints.js, which resolves them at runtime;
+ * this module only cares about the filters.
  *
  * Anything the user set in the Vinted UI (brand, size, category, price, colour,
  * condition, country, ...) travels in the query string, so we pass it through
