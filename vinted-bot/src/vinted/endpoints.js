@@ -91,7 +91,7 @@ export const STRATEGIES = [
   {
     name: 'svc-catalogue-attrs',
     shape: 'attrs',
-    note: 'api host, attribute_ids[...] — returns items for a brand-filtered search',
+    note: 'api host, attribute_ids[...] — confirmed 17.09.2026: brand filter is honoured',
     headers: 'full',
     url: build((d) => `https://api.${bare(d)}/svc-catalogue/items`, attributeIds),
   },

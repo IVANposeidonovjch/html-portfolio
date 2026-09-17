@@ -63,6 +63,16 @@ logger.info(
     `${config.vinted.proxies.length || 'no'} proxies, ${config.vinted.rps} rps/domain`,
 );
 
+// Measured 17.09.2026: the catalog answers 403 to datacenter IPs. Without a
+// proxy every search will fail, so say it once at boot instead of letting the
+// operator read it off a backoff loop an hour later.
+if (!config.vinted.proxies.length) {
+  logger.warn(
+    'PROXIES пуст — каталог Vinted отвечает 403 на запросы с IP дата-центра. ' +
+      'Пропиши резидентный прокси в .env, иначе все поиски будут падать.',
+  );
+}
+
 await bot.start({
   allowed_updates: ['message', 'callback_query', 'pre_checkout_query', 'my_chat_member'],
   onStart: (me) => logger.info(`bot @${me.username} online`),
