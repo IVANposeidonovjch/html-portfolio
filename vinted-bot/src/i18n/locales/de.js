@@ -123,4 +123,20 @@ Beispiel:
   'send.searchDisabled': '⚠️ Suche „{name}“ pausiert: Ich kann nicht in den Zielchat schreiben ({error}).',
   'migrate.done':
     'ℹ️ Gruppe „{title}“ ist jetzt eine Supergruppe — {count} Suche(n) auf den neuen Chat umgezogen, du musst nichts tun.',
+
+  // Telegram command menu (setMyCommands)
+  'cmd.add': 'Link hinzufügen',
+  'cmd.list': 'Meine Links',
+  'cmd.chats': 'Meine Chats und Themen',
+  'cmd.pause': 'Überwachung pausieren',
+  'cmd.resume': 'Überwachung fortsetzen',
+  'cmd.plan': 'Tarif und Limits',
+  'cmd.lang': 'Sprache',
+  'cmd.help': 'So funktioniert es',
+  'cmd.bind': 'Diese Gruppe oder dieses Thema verbinden',
+  'cmd.unbind': 'Diesen Chat trennen',
+  'cmd.users': 'Alle Nutzer',
+  'cmd.userinfo': 'Ein Nutzer im Detail',
+  'cmd.stats': 'Systemstatistik',
+  'cmd.grant': 'Tarif vergeben',
 };

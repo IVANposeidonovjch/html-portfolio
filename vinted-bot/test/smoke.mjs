@@ -447,6 +447,93 @@ test('a group upgraded to a supergroup takes its searches with it', () => {
   }
 });
 
+/* --------------------------- command menu ------------------------------- */
+
+const { publishCommands, buildCommands, COMMAND_SETS } = await import('../src/bot/commands.js');
+
+const fakeApi = () => {
+  const calls = [];
+  return {
+    calls,
+    setMyCommands: async (commands, options) => {
+      calls.push({ commands, options });
+      return true;
+    },
+  };
+};
+
+await (async () => {
+  const api = fakeApi();
+  const result = await publishCommands(api, { adminIds: [1], langOf: () => 'de' });
+
+  test('the menu is published per language and per scope', () => {
+    const langs = Object.keys(LOCALES);
+    // default list + one per language, for private and group scopes, plus one admin
+    assert.equal(api.calls.length, (langs.length + 1) * 2 + 1);
+    assert.equal(result.failed.length, 0);
+
+    const defaults = api.calls.filter((c) => !c.options.language_code);
+    assert.equal(defaults.length, 3, 'default lists must exist for clients we do not translate');
+
+    for (const lang of langs) {
+      const forLang = api.calls.filter((c) => c.options.language_code === lang);
+      assert.equal(forLang.length, 2, `language ${lang} needs a private and a group list`);
+    }
+  });
+
+  test('/bind is offered in groups and nowhere else', () => {
+    for (const call of api.calls) {
+      const names = call.commands.map((c) => c.command);
+      if (call.options.scope.type === 'all_group_chats') {
+        assert.deepEqual(names, COMMAND_SETS.GROUP);
+      } else {
+        assert.ok(!names.includes('bind'), 'a private menu must not advertise /bind');
+      }
+    }
+  });
+
+  test('admin commands go only to the admin own chat, in their language', () => {
+    const adminCall = api.calls.find((c) => c.options.scope.type === 'chat');
+    assert.equal(adminCall.options.scope.chat_id, 1);
+    for (const name of COMMAND_SETS.ADMIN) {
+      assert.ok(adminCall.commands.some((c) => c.command === name), `${name} missing for the admin`);
+    }
+    assert.equal(
+      adminCall.commands.find((c) => c.command === 'add').description,
+      LOCALES.de['cmd.add'],
+      'the admin menu follows the admin language',
+    );
+    // and no broadcast list carries them
+    for (const call of api.calls.filter((c) => c.options.scope.type !== 'chat')) {
+      const names = call.commands.map((c) => c.command);
+      assert.ok(!names.some((n) => COMMAND_SETS.ADMIN.includes(n)), 'admin commands leaked into a public menu');
+    }
+  });
+
+  test('every command has a real description in every language', () => {
+    const all = [...COMMAND_SETS.PRIVATE, ...COMMAND_SETS.GROUP, ...COMMAND_SETS.ADMIN];
+    for (const lang of Object.keys(LOCALES)) {
+      for (const { command, description } of buildCommands(lang, all)) {
+        assert.notEqual(description, `cmd.${command}`, `${lang}: ${command} has no translation`);
+        assert.ok(description.length > 0 && description.length <= 256, `${lang}: ${command} bad length`);
+        assert.match(command, /^[a-z0-9_]{1,32}$/, 'Telegram rejects other command names');
+      }
+    }
+  });
+
+  const broken = {
+    setMyCommands: async (_c, o) => {
+      if (o.scope.type === 'all_group_chats') throw new Error('nope');
+      return true;
+    },
+  };
+  const partial = await publishCommands(broken, { adminIds: [], langOf: () => 'en' });
+  test('startup survives a menu call that fails', () => {
+    assert.equal(partial.failed.length, 5, 'one group-scope failure per language plus the default');
+    assert.ok(partial.published > 0, 'the lists that worked still count');
+  });
+})();
+
 /* --------------------------- admin commands ----------------------------- */
 
 const { createBot } = await import('../src/bot/index.js');

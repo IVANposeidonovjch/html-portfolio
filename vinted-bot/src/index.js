@@ -1,6 +1,7 @@
 import { config } from './config.js';
 import * as store from './db/index.js';
 import { createBot } from './bot/index.js';
+import { publishCommands } from './bot/commands.js';
 import { Sender } from './monitor/sender.js';
 import { Monitor } from './monitor/scheduler.js';
 import { poolStatus } from './vinted/client.js';
@@ -91,16 +92,11 @@ if (!config.vinted.proxies.length) {
       'Пропиши резидентный прокси в .env, иначе все поиски будут падать.',
   );
 }
-await bot.api.setMyCommands([
-  { command: 'add', description: 'Добавить ссылку' },
-  { command: 'list', description: 'Мои ссылки' },
-  { command: 'chats', description: 'Мои чаты и темы' },
-  { command: 'pause', description: 'Выключить мониторинг' },
-  { command: 'resume', description: 'Включить мониторинг' },
-  { command: 'plan', description: 'Тариф и лимиты' },
-  { command: 'lang', description: 'Язык / Language' },
-  { command: 'bind', description: 'Привязать группу/тему' },
-]);
+await publishCommands(bot.api, {
+  adminIds: config.adminIds,
+  langOf: (id) => store.getUser(id)?.lang || 'en',
+});
+
 await bot.start({
   allowed_updates: ['message', 'callback_query', 'pre_checkout_query', 'my_chat_member'],
   onStart: (me) => logger.info(`bot @${me.username} online`),

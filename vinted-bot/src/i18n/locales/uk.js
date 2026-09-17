@@ -123,4 +123,20 @@ export const uk = {
   'send.searchDisabled': '⚠️ Пошук «{name}» вимкнено: не можу писати в цільовий чат ({error}).',
   'migrate.done':
     'ℹ️ Група «{title}» стала супергрупою — перенесено {count} пошук(ів) на новий чат, робити нічого не треба.',
+
+  // Telegram command menu (setMyCommands)
+  'cmd.add': 'Додати посилання',
+  'cmd.list': 'Мої посилання',
+  'cmd.chats': 'Мої чати та теми',
+  'cmd.pause': 'Вимкнути моніторинг',
+  'cmd.resume': 'Увімкнути моніторинг',
+  'cmd.plan': 'Тариф і ліміти',
+  'cmd.lang': 'Мова / Language',
+  'cmd.help': 'Як користуватися',
+  'cmd.bind': 'Підключити цю групу або тему',
+  'cmd.unbind': 'Відключити цей чат',
+  'cmd.users': 'Усі користувачі',
+  'cmd.userinfo': 'Дані користувача',
+  'cmd.stats': 'Статистика системи',
+  'cmd.grant': 'Видати тариф',
 };

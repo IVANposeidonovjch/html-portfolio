@@ -123,4 +123,20 @@ export const ru = {
   'send.searchDisabled': '⚠️ Поиск «{name}» выключен: не могу писать в целевой чат ({error}).',
   'migrate.done':
     'ℹ️ Группа «{title}» стала супергруппой — перенёс {count} поиск(ов) на новый чат, ничего делать не нужно.',
+
+  // Telegram command menu (setMyCommands)
+  'cmd.add': 'Добавить ссылку',
+  'cmd.list': 'Мои ссылки',
+  'cmd.chats': 'Мои чаты и темы',
+  'cmd.pause': 'Выключить мониторинг',
+  'cmd.resume': 'Включить мониторинг',
+  'cmd.plan': 'Тариф и лимиты',
+  'cmd.lang': 'Язык / Language',
+  'cmd.help': 'Как пользоваться',
+  'cmd.bind': 'Привязать эту группу или тему',
+  'cmd.unbind': 'Отвязать этот чат',
+  'cmd.users': 'Все пользователи',
+  'cmd.userinfo': 'Данные пользователя',
+  'cmd.stats': 'Статистика системы',
+  'cmd.grant': 'Выдать тариф',
 };
