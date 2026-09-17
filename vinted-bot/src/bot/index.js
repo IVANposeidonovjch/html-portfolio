@@ -21,6 +21,25 @@ const getFlow = (id) => {
 };
 
 const isAdmin = (id) => config.adminIds.includes(id);
+
+/** Usernames and search names are user-typed: never put them in HTML raw. */
+const esc = (v) =>
+  String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** Telegram caps a message at 4096 chars — send a long report in pieces. */
+async function replyLines(ctx, lines, limit = 3500) {
+  let buffer = '';
+  for (const line of lines) {
+    if (buffer.length + line.length + 1 > limit) {
+      await ctx.reply(buffer, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+      buffer = '';
+    }
+    buffer += (buffer ? '\n' : '') + line;
+  }
+  if (buffer) {
+    await ctx.reply(buffer, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+  }
+}
 const planLabel = { free: 'Free', basic: 'Basic', pro: 'Pro ⚡' };
 
 /** Register the user on first contact, seeding the language from Telegram. */
@@ -441,6 +460,73 @@ export function createBot() {
     const until = plan === 'free' ? null : store.now() + (Number(days) || 30) * 86400;
     store.setPlan.run(plan, until, Number(id));
     await ctx.reply(`OK: ${id} → ${plan}${until ? ` until ${new Date(until * 1000).toISOString().slice(0, 10)}` : ''}`);
+  });
+
+  /**
+   * Who is using the bot. One line per account, busiest first, so a growing
+   * user list stays readable without opening the database.
+   */
+  bot.chatType('private').command('users', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    const rows = store.listAllUsers.all();
+    if (!rows.length) return ctx.reply('Пользователей пока нет.');
+
+    const lines = [`<b>Пользователи: ${rows.length}</b>`, ''];
+    for (const row of rows) {
+      const plan = store.effectivePlan(row);
+      const expired = row.plan !== 'free' && plan === 'free';
+      lines.push(
+        `<code>${row.tg_id}</code> ${row.username ? '@' + esc(row.username) : '—'} · ` +
+          `${planLabel[plan]}${expired ? ` (был ${planLabel[row.plan]}, истёк)` : ''} · ` +
+          `ссылок ${row.active}/${row.total} · отправлено ${row.sent} · ${row.lang}` +
+          `${row.monitoring_enabled ? '' : ' · ⏸ мониторинг выключен'}`,
+      );
+    }
+    lines.push('', 'Детали по одному: /userinfo &lt;tg_id&gt;');
+    await replyLines(ctx, lines);
+  });
+
+  /** The admin's view of exactly what /list shows that user. */
+  bot.chatType('private').command('userinfo', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    const { lang } = who(ctx);
+    const targetId = Number((ctx.match || '').trim());
+    if (!Number.isFinite(targetId) || !targetId) {
+      return ctx.reply('Использование: /userinfo &lt;tg_id&gt;', { parse_mode: 'HTML' });
+    }
+    const target = store.getUser(targetId);
+    if (!target) return ctx.reply(`Пользователь ${targetId} не найден.`);
+
+    const plan = store.effectivePlan(target);
+    const searches = store.listSearches.all(targetId);
+    const lines = [
+      `<b>${targetId}</b> ${target.username ? '@' + esc(target.username) : '(без username)'}`,
+      `Тариф: ${planLabel[plan]}` +
+        (target.plan_until ? ` · до ${new Date(target.plan_until * 1000).toISOString().slice(0, 10)}` : '') +
+        ` · язык ${target.lang} · мониторинг ${target.monitoring_enabled ? '🟢' : '🔴'}`,
+      `Ссылок: ${searches.length}/${searchLimitFor(plan)}` +
+        ` · активных ${searches.filter((s) => s.enabled).length}` +
+        ` · отправлено ${searches.reduce((n, s) => n + s.sent_count, 0)}`,
+      `Зарегистрирован: ${new Date(target.created_at * 1000).toISOString().slice(0, 10)}`,
+      '',
+    ];
+
+    if (!searches.length) {
+      lines.push('Ссылок нет.');
+    } else {
+      for (const search of searches) {
+        lines.push(
+          `${search.enabled ? '🟢' : '⏸'} <b>${esc(search.name)}</b> → ` +
+            `${esc(destinationTitle(search, targetId, lang))} · отправлено ${search.sent_count}`,
+        );
+        lines.push(`   <a href="${esc(search.url)}">поиск</a>` +
+          (search.last_run_at
+            ? ` · проверен ${new Date(search.last_run_at * 1000).toISOString().replace('T', ' ').slice(5, 16)} UTC`
+            : ' · ещё не проверялся'));
+        if (search.last_error) lines.push(`   ⚠️ ${esc(search.last_error).slice(0, 200)}`);
+      }
+    }
+    await replyLines(ctx, lines);
   });
 
   /* ---------------------------- destinations ----------------------------- */

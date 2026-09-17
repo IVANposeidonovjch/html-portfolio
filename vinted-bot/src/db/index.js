@@ -159,6 +159,20 @@ export const cache = {
   set: (key, items) => putCache.run(key, now(), JSON.stringify(items)),
 };
 
+/* -------------------------------- admin ------------------------------- */
+
+/** One row per user with their search counters, for the admin overview. */
+export const listAllUsers = db.prepare(
+  `SELECT u.tg_id, u.username, u.plan, u.plan_until, u.lang, u.monitoring_enabled, u.created_at,
+          COUNT(s.id)                   AS total,
+          COALESCE(SUM(s.enabled), 0)   AS active,
+          COALESCE(SUM(s.sent_count), 0) AS sent
+   FROM users u
+   LEFT JOIN searches s ON s.user_id = u.tg_id
+   GROUP BY u.tg_id
+   ORDER BY active DESC, sent DESC, u.created_at`,
+);
+
 /* -------------------------------- stats ------------------------------- */
 
 export const stats = () => ({

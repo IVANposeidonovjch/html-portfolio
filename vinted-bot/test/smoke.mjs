@@ -5,6 +5,8 @@
 process.env.BOT_TOKEN = 'test';
 process.env.DB_PATH = './data/test.sqlite';
 process.env.DEDUPE_PER_DESTINATION = 'true';
+process.env.ADMIN_IDS = '1';
+process.env.BOT_TOKEN = '111:test';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 
@@ -444,6 +446,82 @@ test('a group upgraded to a supergroup takes its searches with it', () => {
     store.deleteSearch.run(id, 1);
   }
 });
+
+/* --------------------------- admin commands ----------------------------- */
+
+const { createBot } = await import('../src/bot/index.js');
+
+/** Drive a real command through the bot, capturing what it would have sent. */
+async function runCommand(text, fromId, extra = {}) {
+  const bot = createBot();
+  const sent = [];
+  bot.api.config.use(async (prev, method, payload) => {
+    sent.push({ method, payload });
+    return { ok: true, result: { message_id: 1, date: 0, chat: { id: fromId, type: 'private' } } };
+  });
+  bot.botInfo = { id: 111, is_bot: true, first_name: 'T', username: 'testbot', can_join_groups: true,
+    can_read_all_group_messages: false, supports_inline_queries: false, can_connect_to_business: false,
+    has_main_web_app: false };
+  await bot.handleUpdate({
+    update_id: Math.floor(Math.random() * 1e6),
+    message: {
+      message_id: 1,
+      date: Math.floor(Date.now() / 1000),
+      chat: { id: fromId, type: 'private' },
+      from: { id: fromId, is_bot: false, first_name: 'A', username: 'admin', language_code: 'ru' },
+      text,
+      entities: [{ type: 'bot_command', offset: 0, length: text.split(' ')[0].length }],
+      ...extra,
+    },
+  });
+  return sent.filter((c) => c.method === 'sendMessage').map((c) => c.payload.text).join('\n');
+}
+
+await (async () => {
+  // a user with a hostile display name: the report must not break on it
+  store.upsertUser(4242, '<b>pwn</b>', 'de');
+  const evil = store.insertSearch.run({
+    user_id: 4242, name: 'Raf <script>', url: parsed.normalizedUrl, domain: parsed.domain,
+    canonical_key: parsed.canonicalKey, api_query: JSON.stringify(parsed.query),
+    dest_chat_id: 4242, dest_thread_id: null, next_run_at: 0, created_at: store.now(),
+  }).lastInsertRowid;
+  store.bumpSent.run(5, evil);
+
+  const users = await runCommand('/users', 1);
+  test('/users lists every account with its counters', () => {
+    assert.match(users, /Пользователи: \d+/);
+    assert.match(users, /<code>4242<\/code>/, 'the new account must appear');
+    assert.match(users, /<code>1<\/code>/);
+    assert.match(users, /ссылок \d+\/\d+/);
+  });
+
+  test('/users escapes user-controlled names', () => {
+    assert.ok(!users.includes('<b>pwn</b>'), 'a raw tag would break the HTML parse');
+    assert.match(users, /&lt;b&gt;pwn&lt;\/b&gt;/);
+  });
+
+  const info = await runCommand('/userinfo 4242', 1);
+  test('/userinfo shows one account and its searches', () => {
+    assert.match(info, /4242/);
+    assert.match(info, /Raf &lt;script&gt;/, 'search names are escaped too');
+    assert.match(info, /отправлено 5/);
+    assert.match(info, /Тариф: Free/);
+  });
+
+  const noArg = await runCommand('/userinfo', 1);
+  const unknown = await runCommand('/userinfo 999999', 1);
+  test('/userinfo reports bad input instead of failing silently', () => {
+    assert.match(noArg, /Использование/);
+    assert.match(unknown, /не найден/);
+  });
+
+  const forStranger = await runCommand('/users', 777);
+  test('admin commands stay silent for everyone else', () => {
+    assert.equal(forStranger, '', 'a non-admin must get no reply at all');
+  });
+
+  store.deleteSearch.run(evil, 4242);
+})();
 
 console.log(failures ? `\n${failures} test(s) failed` : '\nall tests passed');
 process.exit(failures ? 1 : 0);

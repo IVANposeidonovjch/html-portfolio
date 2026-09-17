@@ -16,7 +16,7 @@ Vinted search URL → Telegram group → Topic → новое объявлени
 ```bash
 cp .env.example .env         # вписать BOT_TOKEN от @BotFather и ADMIN_IDS
 npm install
-npm test                     # 32 офлайн-теста логики
+npm test                     # 37 офлайн-тестов логики
 npm start
 ```
 
@@ -48,6 +48,7 @@ docker compose up -d --build
 | 🌐 Язык · `/lang` | русский, английский, немецкий, украинский |
 | `/bind` | пишется **внутри** группы или темы |
 | `/stats`, `/grant` | только для `ADMIN_IDS` |
+| `/users`, `/userinfo <tg_id>` | админский обзор: кто пользуется и что у него настроено |
 
 ## Архитектура
 
