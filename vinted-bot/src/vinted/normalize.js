@@ -23,6 +23,18 @@ function money(value) {
   return Number.isFinite(amount) ? { amount, currency: '' } : null;
 }
 
+/** item_box.second_line combines size and condition, e.g. "36 · Très bon état".
+ *  Keep only the part that actually looks like a size (has a digit, or is a
+ *  standard letter size) — condition phrases vary by language and are never
+ *  reliably size-shaped. */
+function extractSize(secondLine) {
+  if (!secondLine) return null;
+  for (const part of secondLine.split(/[·/]/).map((p) => p.trim())) {
+    if (/^\d/.test(part) || /^(XXS|XS|S|M|L|XL|XXL|XXXL)$/i.test(part)) return part;
+  }
+  return null;
+}
+
 /** First non-empty value among several candidate paths. */
 const pick = (...values) => values.find((v) => v !== undefined && v !== null && v !== '') ?? null;
 
@@ -39,7 +51,8 @@ export function normalizeItem(raw, domain) {
     id,
     title: pick(raw.title, box.first_line) || 'Без названия',
     brand: pick(raw.brand_title, raw.brand?.title, box.first_line),
-        size: pick(raw.size_title, raw.size),
+          size: pick(raw.size_title, raw.size, extractSize(box.second_line)),
+
     condition: pick(raw.status, raw.condition, box.third_line),
     price: money(pick(raw.price, box.price)),
     totalPrice: money(pick(raw.total_item_price, box.total_item_price)), // incl. buyer protection
