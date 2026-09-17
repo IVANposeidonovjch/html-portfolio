@@ -47,7 +47,7 @@ export function normalizeItem(raw, domain) {
     seller: pick(raw.user?.login, raw.user?.username),
     favourites: Number(raw.favourite_count) || 0,
     uploadedAt: Number(pick(photo?.high_resolution?.timestamp, raw.created_at_ts)) || null,
-    url: pick(raw.url, `https://${domain}/items/${id}`),
+        url: raw.url?.startsWith('http') ? raw.url : `https://${domain}${raw.url || `/items/${id}`}`,
   };
 
   if (!shapeWarned && (!item.price || !item.photoUrl)) {
