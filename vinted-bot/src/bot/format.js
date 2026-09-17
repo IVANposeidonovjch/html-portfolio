@@ -15,17 +15,16 @@ export function renderItem(item, searchName, lang = 'en') {
   if (price) {
     lines.push(
       total && total !== price
-        ? `💶 <b>${esc(price)}</b>  <i>(${esc(t(lang, 'item.protection', { total }))})</i>`
-        : `💶 <b>${esc(price)}</b>`,
+        ? `💰 Price: <b>${esc(price)}</b>  <i>(${esc(t(lang, 'item.protection', { total }))})</i>`
+        : `💰 Price: <b>${esc(price)}</b>`,
     );
   }
-  if (item.brand) lines.push(`🏷 ${esc(item.brand)}`);
+  if (item.brand) lines.push(`🏷 Brand: ${esc(item.brand)}`);
   const meta = [];
   if (item.size) meta.push(`📏 ${esc(item.size)}`);
   if (item.condition) meta.push(`✨ ${esc(item.condition)}`);
   if (meta.length) lines.push(meta.join('   '));
-  if (item.seller) lines.push(`👤 ${esc(item.seller)}`);
-  if (searchName) lines.push(`\n🔎 <i>${esc(searchName)}</i>`);
+  if (searchName) lines.push(`#${esc(searchName.replace(/\s+/g, ''))}`);
 
   return lines.join('\n');
 }
