@@ -165,6 +165,21 @@ export const cache = {
   set: (key, items) => putCache.run(key, now(), JSON.stringify(items)),
 };
 
+/* ------------------------------- settings ----------------------------- */
+
+const selectSetting = db.prepare('SELECT value FROM settings WHERE key = ?');
+const upsertSetting = db.prepare(
+  `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+   ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+);
+const dropSetting = db.prepare('DELETE FROM settings WHERE key = ?');
+
+export const settings = {
+  get: (key) => selectSetting.get(key)?.value ?? null,
+  set: (key, value) => upsertSetting.run(key, value, now()),
+  clear: (key) => dropSetting.run(key),
+};
+
 /* -------------------------------- admin ------------------------------- */
 
 /** One row per user with their search counters, for the admin overview. */

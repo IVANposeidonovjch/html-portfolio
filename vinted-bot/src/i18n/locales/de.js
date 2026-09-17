@@ -165,4 +165,13 @@ Beispiel:
   'btn.toggleOn': '⏸ Überwachung: an',
   'btn.toggleOff': '▶️ Überwachung: aus',
   'kb.menu': '⬅️ Menü',
+
+  // admin image commands
+  'image.what.start': 'die /start-Begrüßung',
+  'image.what.help': 'das /help-Beispiel',
+  'image.usage': '🖼 Schick ein Foto für {what} — als Antwort auf diesen Befehl oder als nächste Nachricht.\nEntfernen: <code>{command} clear</code>',
+  'image.saved': '✅ Bild für {what} gespeichert ({kb} KB). Prüfen mit {check}.',
+  'image.failed': '⚠️ Bild konnte nicht gespeichert werden: {error}',
+  'image.cleared': '🗑 Bild für {what} entfernt.',
+  'image.notPhoto': 'Das ist kein Foto. Schick es als Bild, nicht als Datei.',
 };

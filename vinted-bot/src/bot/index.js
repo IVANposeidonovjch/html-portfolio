@@ -1,9 +1,11 @@
-import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy';
+import { Bot, GrammyError, InlineKeyboard } from 'grammy';
 import { config, intervalFor, searchLimitFor } from '../config.js';
 import * as store from '../db/index.js';
 import { LANGS, isLang, resolveLang, t } from '../i18n/index.js';
 import { logger } from '../util/logger.js';
 import { InvalidVintedUrl, parseSearchUrl } from '../vinted/url.js';
+import { DEMO_SEARCH, demoItem, itemKeyboard, renderItem } from './format.js';
+import { adoptPhoto, forgetImage, imageFor } from './images.js';
 import {
   backRow, cancelKb, chatsKb, confirmDeleteKb, destinationKb, helpKb, langKb, mainMenu, menuOnlyKb,
   searchKb, searchListKb, topicKb,
@@ -127,18 +129,16 @@ export function createBot() {
     const text = t(lang, 'start.text');
     const reply_markup = mainMenu(lang, { monitoring: !!user.monitoring_enabled });
 
-    // A picture is optional: configure START_IMAGE and the welcome becomes a
-    // photo with the menu under it, otherwise the same words are sent as text.
-    if (config.startImage) {
-      const photo = /^https?:\/\//.test(config.startImage)
-        ? config.startImage
-        : new InputFile(config.startImage);
+    // A picture is optional: set one with /setstartimage (or START_IMAGE) and
+    // the welcome becomes a photo with the menu under it.
+    const photo = imageFor('start');
+    if (photo) {
       try {
         await ctx.replyWithPhoto(photo, { caption: text, parse_mode: 'HTML', reply_markup });
         return;
       } catch (err) {
         // a broken path or an image Telegram refuses must not cost the welcome
-        logger.warn(`start image not sent (${config.startImage}): ${err.description || err.message}`);
+        logger.warn(`start image not sent: ${err.description || err.message}`);
       }
     }
     await ctx.reply(text, {
@@ -166,6 +166,22 @@ export function createBot() {
       link_preview_options: { is_disabled: true },
       reply_markup: helpKb(lang),
     });
+
+    // With a picture configured, the example stops being a description of an
+    // alert and becomes one: same photo-plus-caption shape, same renderItem
+    // output, same URL button.
+    const demo = imageFor('help');
+    if (!demo) return;
+    const item = demoItem();
+    try {
+      await ctx.api.sendPhoto(ctx.chat.id, demo, {
+        caption: renderItem(item, DEMO_SEARCH, lang),
+        parse_mode: 'HTML',
+        reply_markup: itemKeyboard(item, lang),
+      });
+    } catch (err) {
+      logger.warn(`help image not sent: ${err.description || err.message}`);
+    }
   }
 
   bot.chatType('private').command('help', showHelp);
@@ -646,6 +662,64 @@ export function createBot() {
       }
     }
     await replyLines(ctx, lines);
+  });
+
+  /**
+   * Setting the pictures without touching the server: send the bot a photo.
+   *
+   * Deliberately absent from every command list, admin scope included — they
+   * are used a handful of times in the life of the deployment, and a menu entry
+   * for them would be noise. Typing them still works.
+   */
+  const imageCommand = (kind, command) => async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    const { lang } = who(ctx);
+    const what = t(lang, `image.what.${kind}`);
+    const arg = (ctx.match || '').trim().toLowerCase();
+
+    if (['clear', 'off', 'remove', 'убрать'].includes(arg)) {
+      forgetImage(kind);
+      return ctx.reply(t(lang, 'image.cleared', { what }));
+    }
+
+    const replied = ctx.msg.reply_to_message?.photo;
+    if (replied) return acceptPhoto(ctx, lang, kind, replied);
+
+    setFlow(ctx.from.id, { step: `image:${kind}` });
+    return ctx.reply(t(lang, 'image.usage', { what, command }), { parse_mode: 'HTML' });
+  };
+
+  async function acceptPhoto(ctx, lang, kind, sizes) {
+    const what = t(lang, `image.what.${kind}`);
+    const largest = sizes[sizes.length - 1]; // Telegram sorts them smallest first
+    // One command captures exactly one photo, successful or not: leaving the
+    // listener armed after a failure would quietly eat the next unrelated photo.
+    flows.delete(ctx.from.id);
+    try {
+      const { bytes } = await adoptPhoto(ctx.api, largest.file_id, kind);
+      await ctx.reply(
+        t(lang, 'image.saved', {
+          what,
+          kb: Math.max(1, Math.round(bytes / 1024)),
+          check: kind === 'start' ? '/start' : '/help',
+        }),
+      );
+    } catch (err) {
+      logger.warn(`could not adopt ${kind} image: ${err.message}`);
+      await ctx.reply(t(lang, 'image.failed', { error: err.message }));
+    }
+  }
+
+  bot.chatType('private').command('setstartimage', imageCommand('start', '/setstartimage'));
+  bot.chatType('private').command('sethelpimage', imageCommand('help', '/sethelpimage'));
+
+  // the photo sent right after the command
+  bot.chatType('private').on('message:photo', async (ctx, next) => {
+    const flow = getFlow(ctx.from.id);
+    const kind = flow?.step?.startsWith('image:') ? flow.step.slice('image:'.length) : null;
+    if (!kind || !isAdmin(ctx.from.id)) return next();
+    const { lang } = who(ctx);
+    await acceptPhoto(ctx, lang, kind, ctx.msg.photo);
   });
 
   /* ---------------------------- destinations ----------------------------- */

@@ -165,4 +165,13 @@ export const ru = {
   'btn.toggleOn': '⏸ Мониторинг: включён',
   'btn.toggleOff': '▶️ Мониторинг: выключен',
   'kb.menu': '⬅️ Меню',
+
+  // admin image commands
+  'image.what.start': 'приветствия /start',
+  'image.what.help': 'примера в /help',
+  'image.usage': '🖼 Пришли фото для {what} — ответом на эту команду или следующим сообщением.\nУбрать картинку: <code>{command} clear</code>',
+  'image.saved': '✅ Картинка для {what} сохранена ({kb} КБ). Проверь командой {check}.',
+  'image.failed': '⚠️ Не удалось сохранить картинку: {error}',
+  'image.cleared': '🗑 Картинка для {what} убрана.',
+  'image.notPhoto': 'Это не фотография. Пришли именно фото (можно и файлом-картинкой, но тогда — как фото).',
 };

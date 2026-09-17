@@ -165,4 +165,13 @@ Example:
   'btn.toggleOn': '⏸ Monitoring: on',
   'btn.toggleOff': '▶️ Monitoring: off',
   'kb.menu': '⬅️ Menu',
+
+  // admin image commands
+  'image.what.start': 'the /start welcome',
+  'image.what.help': 'the /help example',
+  'image.usage': '🖼 Send a photo for {what} — as a reply to this command, or as your next message.\nTo remove it: <code>{command} clear</code>',
+  'image.saved': '✅ Picture for {what} saved ({kb} KB). Check it with {check}.',
+  'image.failed': '⚠️ Could not save the picture: {error}',
+  'image.cleared': '🗑 Picture for {what} removed.',
+  'image.notPhoto': 'That is not a photo. Send it as a picture, not as a document.',
 };

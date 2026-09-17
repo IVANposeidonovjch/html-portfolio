@@ -35,8 +35,10 @@ export const config = {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
   },
 
-  // optional picture for /start: an https URL, or a path to a local file
+  // Optional pictures: an https URL, or a path to a local file. Both are only
+  // the fallback — whatever the admin last sent the bot wins (see bot/images.js).
   startImage: process.env.START_IMAGE || '',
+  helpImage: process.env.HELP_IMAGE || '',
 
   dedupePerDestination: bool(process.env.DEDUPE_PER_DESTINATION, true),
 

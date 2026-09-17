@@ -165,4 +165,13 @@ export const uk = {
   'btn.toggleOn': '⏸ Моніторинг: увімкнено',
   'btn.toggleOff': '▶️ Моніторинг: вимкнено',
   'kb.menu': '⬅️ Меню',
+
+  // admin image commands
+  'image.what.start': 'привітання /start',
+  'image.what.help': 'прикладу в /help',
+  'image.usage': '🖼 Надішли фото для {what} — відповіддю на цю команду або наступним повідомленням.\nПрибрати: <code>{command} clear</code>',
+  'image.saved': '✅ Картинку для {what} збережено ({kb} КБ). Перевір командою {check}.',
+  'image.failed': '⚠️ Не вдалося зберегти картинку: {error}',
+  'image.cleared': '🗑 Картинку для {what} прибрано.',
+  'image.notPhoto': 'Це не фото. Надішли саме фотографію, не файлом.',
 };

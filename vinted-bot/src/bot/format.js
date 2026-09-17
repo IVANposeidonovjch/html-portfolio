@@ -37,6 +37,27 @@ export function renderItem(item, searchName, lang = 'en') {
   return lines.join('\n');
 }
 
+/**
+ * The listing shown in /help and in the demo photo. Both render it through
+ * renderItem(), so the example can never describe something the bot no longer
+ * sends — a test asserts the help text contains this exact output.
+ */
+export const DEMO_SEARCH = 'Raf';
+export const demoItem = () => ({
+  id: 1,
+  title: 'Raf Simons bomber',
+  brand: 'Raf Simons',
+  size: 'L',
+  condition: null,
+  price: { amount: 240, currency: 'EUR' },
+  totalPrice: null,
+  photoUrl: null,
+  seller: null,
+  favourites: 0,
+  uploadedAt: null,
+  url: 'https://www.vinted.de/items/1',
+});
+
 export const itemKeyboard = (item, lang = 'en') => ({
   inline_keyboard: [[{ text: t(lang, 'item.button'), url: item.url }]],
 });

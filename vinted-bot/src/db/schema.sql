@@ -73,6 +73,13 @@ CREATE TABLE IF NOT EXISTS sent_destinations (
   PRIMARY KEY (dest_key, item_id)
 );
 
+-- Small key/value store for things the admin sets at runtime (image paths, ...)
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 -- Shared fetch cache so identical searches of different users cost one request
 CREATE TABLE IF NOT EXISTS poll_cache (
   canonical_key TEXT PRIMARY KEY,

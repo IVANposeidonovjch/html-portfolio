@@ -17,7 +17,7 @@ fs.rmSync('./data/test.sqlite-shm', { force: true });
 const { parseSearchUrl, InvalidVintedUrl } = await import('../src/vinted/url.js');
 const store = await import('../src/db/index.js');
 const { Monitor } = await import('../src/monitor/scheduler.js');
-const { renderItem, itemKeyboard } = await import('../src/bot/format.js');
+const { renderItem, itemKeyboard, demoItem, DEMO_SEARCH } = await import('../src/bot/format.js');
 const { LOCALES, allLabels, resolveLang, t } = await import('../src/i18n/index.js');
 const { STRATEGIES, extractItems, strategyByName, orderedStrategies, filtersLookHonoured } =
   await import('../src/vinted/endpoints.js');
@@ -251,20 +251,8 @@ test('a search name becomes a usable hashtag', () => {
 
 test('the help example is exactly what the bot really sends', () => {
   // the example drifted from renderItem() once; this keeps them married
-  const sample = normalizeItem(
-    {
-      id: 1,
-      title: 'Raf Simons bomber',
-      brand_title: 'Raf Simons',
-      size_title: 'L',
-      price: { amount: '240.0', currency_code: 'EUR' },
-      photo: { url: 'https://img/1.jpg' },
-      url: 'https://www.vinted.de/items/1',
-    },
-    'www.vinted.de',
-  );
   for (const lang of Object.keys(LOCALES)) {
-    const rendered = renderItem(sample, 'Raf', lang);
+    const rendered = renderItem(demoItem(), DEMO_SEARCH, lang);
     assert.ok(
       LOCALES[lang]['help.text'].includes(rendered),
       `${lang}: help shows an alert the code no longer produces\n--- code ---\n${rendered}`,
@@ -587,7 +575,20 @@ test('/bind is offered in groups and nowhere else', () => {
     }
   });
 
-  test('admin commands go only to the admin own chat, in their language', () => {
+  test('the picture commands are invisible in every command list', () => {
+  const everywhere = [...COMMAND_SETS.PRIVATE, ...COMMAND_SETS.GROUP, ...COMMAND_SETS.ADMIN];
+  for (const hidden of ['setstartimage', 'sethelpimage']) {
+    assert.ok(!everywhere.includes(hidden), `${hidden} must not be advertised anywhere`);
+  }
+  for (const call of api.calls) {
+    const names = call.commands.map((c) => c.command);
+    for (const hidden of ['setstartimage', 'sethelpimage']) {
+      assert.ok(!names.includes(hidden), `${hidden} leaked into scope ${call.options.scope.type}`);
+    }
+  }
+});
+
+test('admin commands go only to the admin own chat, in their language', () => {
     const adminCall = api.calls.find((c) => c.options.scope.type === 'chat');
     assert.equal(adminCall.options.scope.chat_id, 1);
     for (const name of COMMAND_SETS.ADMIN) {
@@ -626,6 +627,60 @@ test('/bind is offered in groups and nowhere else', () => {
   test('startup survives a menu call that fails', () => {
     assert.equal(partial.failed.length, 5, 'one group-scope failure per language plus the default');
     assert.ok(partial.published > 0, 'the lists that worked still count');
+  });
+})();
+
+/* ------------------------------- pictures -------------------------------- */
+
+const imagesModule = await import('../src/bot/images.js');
+const fsMod = await import('node:fs');
+const pathMod = await import('node:path');
+
+await (async () => {
+  const fakeApi = { getFile: async (id) => ({ file_id: id, file_path: `photos/${id}.jpg` }) };
+  const pixels = Buffer.from('89504e470d0a1a0a', 'hex'); // a PNG header is enough
+
+  const saved = await imagesModule.adoptPhoto(fakeApi, 'AgACfoo', 'help', {
+    download: async (filePath) => {
+      assert.equal(filePath, 'photos/AgACfoo.jpg', 'the path Telegram gave us is what we fetch');
+      return pixels;
+    },
+  });
+
+  test('a photo sent by the admin is downloaded into the data volume', () => {
+    assert.ok(fsMod.existsSync(saved.path), 'the file must exist on disk');
+    assert.equal(fsMod.readFileSync(saved.path).length, pixels.length);
+    assert.match(saved.path, /data[\\/]images[\\/]help\.jpg$/);
+    assert.equal(store.settings.get('help_image'), saved.path, 'and be remembered across restarts');
+  });
+
+  test('the stored picture is what /help will send', () => {
+    const picture = imagesModule.imageFor('help');
+    assert.ok(picture, 'imageFor must resolve it');
+    assert.ok(imagesModule.hasImage('help'));
+  });
+
+  test('a stored picture that vanished falls back instead of breaking', () => {
+    fsMod.rmSync(saved.path);
+    assert.equal(imagesModule.imageFor('help'), null, 'no picture beats a broken one');
+    assert.equal(store.settings.get('help_image'), saved.path, 'the setting is kept for diagnosis');
+  });
+
+  test('replacing a picture leaves no orphan of another extension', async () => {
+    const dir = pathMod.dirname(saved.path);
+    fsMod.mkdirSync(dir, { recursive: true });
+    fsMod.writeFileSync(pathMod.join(dir, 'help.png'), pixels);
+    const again = await imagesModule.adoptPhoto(fakeApi, 'AgACbar', 'help', {
+      download: async () => pixels,
+    });
+    assert.ok(!fsMod.existsSync(pathMod.join(dir, 'help.png')), 'the old file must go');
+    assert.ok(fsMod.existsSync(again.path));
+  });
+
+  test('clearing removes the file and the setting', () => {
+    imagesModule.forgetImage('help');
+    assert.equal(store.settings.get('help_image'), null);
+    assert.equal(imagesModule.hasImage('help'), false);
   });
 })();
 
@@ -849,6 +904,35 @@ await (async () => {
   });
   store.setLang.run('ru', UID);
 
+  // /help with a picture configured: the example becomes a real-looking alert
+  const demoPath = pathMod.join(pathMod.dirname(pathMod.resolve(process.env.DB_PATH)), 'images', 'help.jpg');
+  fsMod.mkdirSync(pathMod.dirname(demoPath), { recursive: true });
+  fsMod.writeFileSync(demoPath, Buffer.from('89504e470d0a1a0a', 'hex'));
+  store.settings.set('help_image', demoPath);
+  const helpWithPhoto = await drive(pressUpdate('m:help', UID), UID);
+  store.settings.clear('help_image');
+  fsMod.rmSync(demoPath, { force: true });
+
+  test('help shows the example as an actual photo when one is set', () => {
+    const photo = helpWithPhoto.find((c) => c.method === 'sendPhoto');
+    assert.ok(photo, 'the sample alert must be a photo message');
+    assert.equal(
+      photo.payload.caption,
+      renderItem(demoItem(), DEMO_SEARCH, 'ru'),
+      'the caption must be produced by renderItem, not written by hand',
+    );
+    assert.equal(photo.payload.reply_markup.inline_keyboard[0][0].text, 'URL');
+    assert.ok(
+      helpWithPhoto.some((c) => c.method === 'editMessageText'),
+      'and the help text itself is still shown',
+    );
+  });
+
+  const helpNoPhoto = await drive(pressUpdate('m:help', UID), UID);
+  test('without a picture help stays text only', () => {
+    assert.ok(!helpNoPhoto.some((c) => c.method === 'sendPhoto'));
+  });
+
   const typedLabel = await drive(textUpdate(LOCALES.ru['btn.add'], UID), UID);
   test('the old button captions are just text now, they start nothing', () => {
     const reply = typedLabel.find((c) => c.method === 'sendMessage');
@@ -913,6 +997,43 @@ await (async () => {
   test('/userinfo reports bad input instead of failing silently', () => {
     assert.match(noArg, /Использование/);
     assert.match(unknown, /не найден/);
+  });
+
+  const askStart = await runCommand('/setstartimage', 1);
+  test('a picture command asks for the photo and waits for it', () => {
+    assert.match(askStart, /\/setstartimage clear/, 'it says how to remove one too');
+  });
+
+  const strangerImage = await runCommand('/sethelpimage', 777);
+  test('the picture commands ignore everyone but admins', () => {
+    assert.equal(strangerImage, '', 'a non-admin gets no reply at all');
+  });
+
+  // the command arms a one-shot listener: the next photo from that admin is the picture
+  await runCommand('/sethelpimage', 1);
+  const photoUpdate = {
+    update_id: Math.floor(Math.random() * 1e6),
+    message: {
+      message_id: 2,
+      date: Math.floor(Date.now() / 1000),
+      chat: { id: 1, type: 'private' },
+      from: { id: 1, is_bot: false, first_name: 'A', username: 'admin', language_code: 'ru' },
+      photo: [
+        { file_id: 'small', file_unique_id: 's', width: 90, height: 90 },
+        { file_id: 'biggest', file_unique_id: 'b', width: 1280, height: 1280 },
+      ],
+    },
+  };
+  const afterPhoto = await drive(photoUpdate, 1);
+  test('the photo sent after the command is picked up, at full size', () => {
+    const getFile = afterPhoto.find((c) => c.method === 'getFile');
+    assert.ok(getFile, 'the bot must fetch the file it was just sent');
+    assert.equal(getFile.payload.file_id, 'biggest', 'Telegram lists sizes small first — take the last');
+  });
+
+  const strayPhoto = await drive({ ...photoUpdate, update_id: photoUpdate.update_id + 1 }, 1);
+  test('a later photo is not swallowed as a picture update', () => {
+    assert.ok(!strayPhoto.some((c) => c.method === 'getFile'), 'the listener is one-shot');
   });
 
   const forStranger = await runCommand('/users', 777);
