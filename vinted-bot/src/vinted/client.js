@@ -2,7 +2,13 @@ import { ProxyAgent, request } from 'undici';
 import { config } from '../config.js';
 import { logger } from '../util/logger.js';
 import { TokenBucket, sleep } from '../util/ratelimit.js';
-import { extractItems, filtersLookHonoured, orderedStrategies, strategyByName } from './endpoints.js';
+import {
+  extractItems,
+  filtersLookHonoured,
+  hasIdFilters,
+  orderedStrategies,
+  strategyByName,
+} from './endpoints.js';
 
 /**
  * Vinted has no public API. Its own web app talks to an internal catalog
@@ -114,7 +120,19 @@ export class VintedError extends Error {
 
 const buckets = new Map(); // domain -> TokenBucket
 const sessions = new Map(); // `${domain}|${proxy}` -> Session
-const resolved = new Map(); // domain -> { strategy, headerKind } that last returned items
+/**
+ * Resolved endpoints, keyed by domain AND query class.
+ *
+ * Keying by domain alone was a bug with teeth: a text-only search ("Ralph")
+ * resolves to the plain shape, and the next brand-filtered search ("Spice") on
+ * the same domain reused that cached choice, dropping its brand filter and
+ * flooding the topic with other brands. Text-only and filtered queries need
+ * their own resolutions, because they are allowed different variants.
+ */
+const resolved = new Map(); // `${domain}|${class}` -> { strategy, headerKind }
+
+const queryClass = (query) => (hasIdFilters(query) ? 'filtered' : 'text');
+const cacheKey = (domain, query) => `${domain}|${queryClass(query)}`;
 let proxyCursor = 0;
 
 function bucketFor(domain) {
@@ -152,13 +170,26 @@ export function candidatesFor(domain, query = {}) {
     const preferred = strategy.headers || 'plain';
     pairs.push({ strategy, headerKind: preferred }, { strategy, headerKind: flip(preferred) });
   }
-  const known = resolved.get(domain);
+  const known = resolved.get(cacheKey(domain, query));
   if (!known) return pairs;
+  // Second guard, independent of the key: a remembered choice only goes first
+  // if it is still a legal candidate for THIS query. Anything else means the
+  // cache is stale or from another query class — ignore it rather than trust it.
+  const allowed = pairs.some((p) => p.strategy === known.strategy && p.headerKind === known.headerKind);
+  if (!allowed) return pairs;
   return [
     known,
     ...pairs.filter((p) => !(p.strategy === known.strategy && p.headerKind === known.headerKind)),
   ];
 }
+
+/** Exposed so tests can drive the cache without going near the network. */
+export const endpointCache = {
+  remember: (domain, query, pair) => resolved.set(cacheKey(domain, query), pair),
+  get: (domain, query) => resolved.get(cacheKey(domain, query)),
+  forget: (domain, query) => resolved.delete(cacheKey(domain, query)),
+  clear: () => resolved.clear(),
+};
 
 const isHtml = (headers) => /text\/html/i.test(headers['content-type'] || '');
 
@@ -229,16 +260,18 @@ export async function fetchCatalog(domain, query, { perPage = config.vinted.perP
         const verdict = filtersLookHonoured(query, items);
         if (verdict && !verdict.ok) {
           gone.push(`${strategy.name}/${headerKind}: фильтры проигнорированы (${verdict.detail})`);
-          if (resolved.get(domain)?.strategy === strategy) resolved.delete(domain);
+          if (resolved.get(cacheKey(domain, query))?.strategy === strategy) {
+            resolved.delete(cacheKey(domain, query));
+          }
           await bucketFor(domain).take();
           continue;
         }
 
-        const known = resolved.get(domain);
+        const known = resolved.get(cacheKey(domain, query));
         if (known?.strategy !== strategy || known?.headerKind !== headerKind) {
-          resolved.set(domain, pair);
+          resolved.set(cacheKey(domain, query), pair);
           logger.info(
-            `vinted endpoint for ${domain}: ${strategy.name} headers=${headerKind} (${strategy.note})` +
+            `vinted endpoint for ${domain} (${queryClass(query)}): ${strategy.name} headers=${headerKind} (${strategy.note})` +
               `${verdict ? `, фильтры соблюдаются: ${verdict.detail}` : ''} — ${url}`,
           );
         }
@@ -277,8 +310,10 @@ export async function fetchCatalog(domain, query, { perPage = config.vinted.perP
       }
 
       gone.push(error.message);
-      const known = resolved.get(domain);
-      if (known?.strategy === strategy && known?.headerKind === headerKind) resolved.delete(domain);
+      const known = resolved.get(cacheKey(domain, query));
+      if (known?.strategy === strategy && known?.headerKind === headerKind) {
+        resolved.delete(cacheKey(domain, query));
+      }
       await bucketFor(domain).take(); // stay polite while walking candidates
     }
 
@@ -301,9 +336,12 @@ export function poolStatus() {
     proxy: s.proxy ?? 'direct',
     cookies: s.cookies.size,
     csrf: !!s.csrfToken,
-    endpoint: resolved.get(s.domain)
-      ? `${resolved.get(s.domain).strategy.name}/${resolved.get(s.domain).headerKind}`
-      : 'не определён',
+    endpoints: ['text', 'filtered']
+      .map((cls) => {
+        const hit = resolved.get(`${s.domain}|${cls}`);
+        return `${cls}: ${hit ? `${hit.strategy.name}/${hit.headerKind}` : 'не определён'}`;
+      })
+      .join(', '),
     blockedFor: Math.max(0, Math.round((s.blockedUntil - Date.now()) / 1000)),
   }));
 }

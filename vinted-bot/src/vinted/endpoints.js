@@ -156,14 +156,23 @@ export function orderedStrategies(query) {
  * as "no objection", never as proof.
  */
 export function filtersLookHonoured(query, items) {
-  const wanted = String(query.brand_ids || '').split(',').filter(Boolean);
-  if (!wanted.length || items.length < 3) return null;
+  if (items.length < 3) return null;
 
-  const ids = items.map((i) => i.brand_id ?? i.brand?.id).filter((v) => v !== undefined && v !== null);
-  if (ids.length === items.length) {
-    const matching = ids.filter((id) => wanted.includes(String(id))).length;
-    return { ok: matching === ids.length, detail: `${matching}/${ids.length} объявлений с нужным brand_id` };
+  // Exact check wherever the listing carries the id we filtered on.
+  for (const [filter, field] of [['brand_ids', 'brand_id'], ['catalog_ids', 'catalog_id']]) {
+    const wantedIds = String(query[filter] || '').split(',').filter(Boolean);
+    if (!wantedIds.length) continue;
+    const ids = items.map((i) => i[field] ?? i[field.replace('_id', '')]?.id).filter((v) => v != null);
+    if (ids.length !== items.length) continue;
+    const matching = ids.filter((id) => wantedIds.includes(String(id))).length;
+    return {
+      ok: matching === ids.length,
+      detail: `${matching}/${ids.length} объявлений с нужным ${field}`,
+    };
   }
+
+  const wanted = String(query.brand_ids || '').split(',').filter(Boolean);
+  if (!wanted.length) return null;
 
   const titles = new Set(items.map((i) => i.brand_title || i.brand?.title || i.item_box?.first_line).filter(Boolean));
   if (titles.size <= 1) return null;

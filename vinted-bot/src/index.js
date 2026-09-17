@@ -42,7 +42,11 @@ bot.chatType('private').command('stats', async (ctx) => {
       `Отправлено объявлений: ${s.sent}`,
       `Циклов: ${r.cycles} · HTTP-запросов к Vinted: ${r.fetches} · в очереди отправки: ${r.queue}`,
       '',
-      ...poolStatus().map((p) => `${p.domain} via ${p.proxy}: cookies=${p.cookies} cooldown=${p.blockedFor}s`),
+      ...poolStatus().map(
+        (p) =>
+          `${p.domain} via ${p.proxy}: cookies=${p.cookies} csrf=${p.csrf ? 'да' : 'нет'} ` +
+          `cooldown=${p.blockedFor}s | ${p.endpoints}`,
+      ),
     ].join('\n'),
   );
 });

@@ -18,7 +18,7 @@ const { Monitor } = await import('../src/monitor/scheduler.js');
 const { renderItem } = await import('../src/bot/format.js');
 const { STRATEGIES, extractItems, strategyByName, orderedStrategies, filtersLookHonoured } =
   await import('../src/vinted/endpoints.js');
-const { candidatesFor } = await import('../src/vinted/client.js');
+const { candidatesFor, endpointCache } = await import('../src/vinted/client.js');
 const { normalizeItem } = await import('../src/vinted/normalize.js');
 
 let failures = 0;
@@ -134,6 +134,54 @@ test('the plain shape is never offered to a filtered query', () => {
   assert.equal(new URL(url).searchParams.get('brand_ids'), null);
 });
 
+test('a text search resolution never leaks into a brand-filtered search', () => {
+  // The Ralph -> Spice bug: "Ralph" (text only) resolved to the plain shape,
+  // and "Spice" (brand filter) on the same domain reused it, so its filter was
+  // dropped and the topic filled with other brands.
+  endpointCache.clear();
+  const ralph = { search_text: 'ralph lauren' };
+  const spice = { search_text: 'spice', brand_ids: '344976' };
+
+  endpointCache.remember('www.vinted.de', ralph, {
+    strategy: strategyByName('svc-catalogue'),
+    headerKind: 'plain',
+  });
+
+  // the text search keeps its cached choice
+  assert.equal(candidatesFor('www.vinted.de', ralph)[0].strategy.name, 'svc-catalogue');
+
+  // the filtered search must not see it at all — not first, not as a fallback
+  const forSpice = candidatesFor('www.vinted.de', spice);
+  assert.equal(forSpice[0].strategy.name, 'svc-catalogue-attrs');
+  assert.ok(
+    forSpice.every((p) => p.strategy.shape === 'attrs'),
+    `plain shape reached a filtered query: ${forSpice.map((p) => p.strategy.name).join(',')}`,
+  );
+
+  // and the two classes are remembered separately
+  endpointCache.remember('www.vinted.de', spice, {
+    strategy: strategyByName('svc-catalogue-attrs'),
+    headerKind: 'full',
+  });
+  assert.equal(endpointCache.get('www.vinted.de', ralph).strategy.name, 'svc-catalogue');
+  assert.equal(endpointCache.get('www.vinted.de', spice).strategy.name, 'svc-catalogue-attrs');
+  endpointCache.clear();
+});
+
+test('a cached choice that is no longer a legal candidate is ignored', () => {
+  endpointCache.clear();
+  const filtered = { brand_ids: '5' };
+  // simulate a stale entry: right key, but a variant this query may not use
+  endpointCache.remember('www.vinted.de', filtered, {
+    strategy: strategyByName('legacy-catalog'),
+    headerKind: 'full',
+  });
+  const pairs = candidatesFor('www.vinted.de', filtered);
+  assert.equal(pairs[0].strategy.name, 'svc-catalogue-attrs');
+  assert.ok(pairs.every((p) => p.strategy.name !== 'legacy-catalog'));
+  endpointCache.clear();
+});
+
 test('a response that ignored the brand filter is rejected, not cached', () => {
   const query = { brand_ids: '5' };
   const withIds = (ids) => ids.map((brand_id, n) => ({ id: n, brand_id }));
@@ -152,6 +200,11 @@ test('a response that ignored the brand filter is rejected, not cached', () => {
   assert.equal(filtersLookHonoured(query, withIds([9])), null, 'too few items to judge');
   assert.equal(filtersLookHonoured({ search_text: 'raf' }, withIds([9, 9, 9])), null,
     'without a brand filter there is nothing to verify');
+
+  // the same check covers catalog_ids where the listing carries one
+  const cat = (ids) => ids.map((catalog_id, id) => ({ id, catalog_id }));
+  assert.equal(filtersLookHonoured({ catalog_ids: '2050' }, cat([2050, 2050, 2050])).ok, true);
+  assert.equal(filtersLookHonoured({ catalog_ids: '2050' }, cat([2050, 76, 12])).ok, false);
 });
 
 /* ------------------------------ normalizing ----------------------------- */
