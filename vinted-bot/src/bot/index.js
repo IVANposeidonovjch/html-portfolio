@@ -5,7 +5,7 @@ import { LANGS, isLang, resolveLang, t } from '../i18n/index.js';
 import { logger } from '../util/logger.js';
 import { InvalidVintedUrl, parseSearchUrl } from '../vinted/url.js';
 import { DEMO_SEARCH, demoItem, itemKeyboard, renderItem } from './format.js';
-import { helpText } from './help.js';
+import { helpParts, helpText } from './help.js';
 import { adoptPhoto, forgetImage, imageFor } from './images.js';
 import {
   backRow, cancelKb, chatsKb, confirmDeleteKb, destinationKb, helpKb, langKb, mainMenu, menuOnlyKb,
@@ -163,27 +163,36 @@ export function createBot() {
   async function showHelp(ctx) {
     const { lang } = who(ctx);
     const demo = imageFor('help');
+    const html = { parse_mode: 'HTML', link_preview_options: { is_disabled: true } };
 
-    await render(ctx, helpText(lang, !!demo), {
-      parse_mode: 'HTML',
-      link_preview_options: { is_disabled: true },
-      reply_markup: helpKb(lang),
-    });
+    // No picture: one message, mockup inside, buttons under it.
+    if (!demo) {
+      return render(ctx, helpText(lang, false), { ...html, reply_markup: helpKb(lang) });
+    }
 
-    // With a picture configured, the example stops being a description of an
-    // alert and becomes one: same photo-plus-caption shape, same renderItem
-    // output, same URL button.
-    if (!demo) return;
+    // With a picture the example becomes a real alert, so the text has to open
+    // a gap for it: intro up to the pointer, photo, then the rest with the
+    // buttons — which is also why the intro goes out without any markup.
+    const { intro, rest } = helpParts(lang);
+    await render(ctx, intro, html);
+
     const item = demoItem();
+    let shown = false;
     try {
       await ctx.api.sendPhoto(ctx.chat.id, demo, {
         caption: renderItem(item, DEMO_SEARCH, lang),
         parse_mode: 'HTML',
         reply_markup: itemKeyboard(item, lang),
       });
+      shown = true;
     } catch (err) {
       logger.warn(`help image not sent: ${err.description || err.message}`);
     }
+
+    // If the photo could not be sent, the written mockup stands in for it —
+    // better a described example than a pointer at nothing.
+    const tail = shown ? rest : `${t(lang, 'help.example')}\n\n${rest}`;
+    await ctx.api.sendMessage(ctx.chat.id, tail, { ...html, reply_markup: helpKb(lang) });
   }
 
   bot.chatType('private').command('help', showHelp);

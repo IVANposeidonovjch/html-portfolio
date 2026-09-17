@@ -18,7 +18,7 @@ const { parseSearchUrl, InvalidVintedUrl } = await import('../src/vinted/url.js'
 const store = await import('../src/db/index.js');
 const { Monitor } = await import('../src/monitor/scheduler.js');
 const { renderItem, itemKeyboard, demoItem, DEMO_SEARCH } = await import('../src/bot/format.js');
-const { helpText } = await import('../src/bot/help.js');
+const { helpText, helpParts } = await import('../src/bot/help.js');
 const { LOCALES, allLabels, resolveLang, t } = await import('../src/i18n/index.js');
 const { STRATEGIES, extractItems, strategyByName, orderedStrategies, filtersLookHonoured } =
   await import('../src/vinted/endpoints.js');
@@ -26,13 +26,27 @@ const { candidatesFor, endpointCache } = await import('../src/vinted/client.js')
 const { normalizeItem } = await import('../src/vinted/normalize.js');
 
 let failures = 0;
+const pending = [];
+const fail = (name, e) => {
+  failures++;
+  console.log(`FAIL  ${name}\n      ${e.message}`);
+};
+
+/**
+ * An async callback used to be fired and forgotten: its assertions never
+ * reported, and its side effects landed in the middle of a later test. Now the
+ * promise is collected and awaited before the summary.
+ */
 const test = (name, fn) => {
   try {
-    fn();
+    const result = fn();
+    if (result && typeof result.then === 'function') {
+      pending.push(result.then(() => console.log(`  ok  ${name}`), (e) => fail(name, e)));
+      return;
+    }
     console.log(`  ok  ${name}`);
   } catch (e) {
-    failures++;
-    console.log(`FAIL  ${name}\n      ${e.message}`);
+    fail(name, e);
   }
 };
 
@@ -686,13 +700,13 @@ await (async () => {
     assert.equal(store.settings.get('help_image'), saved.path, 'the setting is kept for diagnosis');
   });
 
-  test('replacing a picture leaves no orphan of another extension', async () => {
-    const dir = pathMod.dirname(saved.path);
-    fsMod.mkdirSync(dir, { recursive: true });
-    fsMod.writeFileSync(pathMod.join(dir, 'help.png'), pixels);
-    const again = await imagesModule.adoptPhoto(fakeApi, 'AgACbar', 'help', {
-      download: async () => pixels,
-    });
+  const dir = pathMod.dirname(saved.path);
+  fsMod.mkdirSync(dir, { recursive: true });
+  fsMod.writeFileSync(pathMod.join(dir, 'help.png'), pixels);
+  const again = await imagesModule.adoptPhoto(fakeApi, 'AgACbar', 'help', {
+    download: async () => pixels,
+  });
+  test('replacing a picture leaves no orphan of another extension', () => {
     assert.ok(!fsMod.existsSync(pathMod.join(dir, 'help.png')), 'the old file must go');
     assert.ok(fsMod.existsSync(again.path));
   });
@@ -947,8 +961,74 @@ await (async () => {
     assert.equal(photo.payload.reply_markup.inline_keyboard[0][0].text, 'URL');
     const edit = helpWithPhoto.find((c) => c.method === 'editMessageText');
     assert.ok(edit, 'and the help text itself is still shown');
-    assert.equal(edit.payload.text, helpText('ru', true), 'in its pointer form, not the mockup');
     assert.ok(!edit.payload.text.includes('[ URL ]'), 'the example must not be told twice');
+  });
+
+  test('the photo lands where the example belongs, buttons last', () => {
+    const { intro, rest } = helpParts('ru');
+    const order = helpWithPhoto
+      .filter((c) => ['editMessageText', 'sendPhoto', 'sendMessage'].includes(c.method))
+      .map((c) => c.method);
+    assert.deepEqual(order, ['editMessageText', 'sendPhoto', 'sendMessage'], 'text, photo, then the rest');
+
+    const [text, , tail] = helpWithPhoto.filter((c) => order.includes(c.method));
+    assert.equal(text.payload.text, intro);
+    assert.match(text.payload.text, /⬇️$/, 'the intro ends pointing at the photo');
+    assert.equal(text.payload.reply_markup, undefined, 'no buttons above the photo');
+
+    assert.equal(tail.payload.text, rest);
+    assert.ok(tail.payload.reply_markup.inline_keyboard, 'the buttons ride on the last message');
+    assert.deepEqual(
+      tail.payload.reply_markup.inline_keyboard.flat().map((b) => b.callback_data),
+      ['m:plan', 'm:lang', 'm:chats', 'm:home'],
+    );
+  });
+
+  test('the split loses nothing from the help text', () => {
+    for (const lang of Object.keys(LOCALES)) {
+      const { intro, rest } = helpParts(lang);
+      const whole = helpText(lang, true);
+      for (const piece of [intro, rest]) {
+        for (const line of piece.split('\n').filter((l) => l.trim())) {
+          assert.ok(whole.includes(line.trim()), `${lang}: line dropped by the split: ${line}`);
+        }
+      }
+      assert.ok(intro.includes('⚡️'), `${lang}: the opening is missing from the intro`);
+      assert.ok(rest.includes('⌨️'), `${lang}: the commands section is missing from the tail`);
+    }
+  });
+
+  // the picture is configured but Telegram refuses it
+  store.settings.set('help_image', demoPath);
+  fsMod.mkdirSync(pathMod.dirname(demoPath), { recursive: true });
+  fsMod.writeFileSync(demoPath, Buffer.from('89504e470d0a1a0a', 'hex'));
+  const brokenPhoto = await (async () => {
+    const bot = createBot();
+    const calls = [];
+    bot.api.config.use(async (prev, method, payload) => {
+      calls.push({ method, payload });
+      if (method === 'sendPhoto') {
+        return { ok: false, error_code: 400, description: 'Bad Request: IMAGE_PROCESS_FAILED' };
+      }
+      return { ok: true, result: { message_id: 10, date: 0, chat: { id: UID, type: 'private' } } };
+    });
+    bot.botInfo = { id: 111, is_bot: true, first_name: 'T', username: 'testbot', can_join_groups: true,
+      can_read_all_group_messages: false, supports_inline_queries: false, can_connect_to_business: false,
+      has_main_web_app: false };
+    await bot.handleUpdate(pressUpdate('m:help', UID));
+    return calls;
+  })();
+  store.settings.clear('help_image');
+  fsMod.rmSync(demoPath, { force: true });
+
+  test('a refused photo falls back to the written example', () => {
+    const tail = brokenPhoto.find((c) => c.method === 'sendMessage');
+    assert.ok(tail, 'the rest of help must still arrive');
+    assert.ok(
+      tail.payload.text.includes(renderItem(demoItem(), DEMO_SEARCH, 'ru')),
+      'with the mockup standing in, rather than a pointer at nothing',
+    );
+    assert.ok(tail.payload.reply_markup.inline_keyboard, 'and the buttons are still there');
   });
 
   const helpNoPhoto = await drive(pressUpdate('m:help', UID), UID);
@@ -1070,5 +1150,6 @@ await (async () => {
   store.deleteSearch.run(evil, 4242);
 })();
 
+await Promise.all(pending);
 console.log(failures ? `\n${failures} test(s) failed` : '\nall tests passed');
 process.exit(failures ? 1 : 0);
