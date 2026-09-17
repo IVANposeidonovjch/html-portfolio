@@ -12,9 +12,9 @@ export const LOCALES = { en, ru, de, uk };
 
 export const LANGS = [
   { code: 'en', label: '🇬🇧 English' },
-  { code: 'ru', label: '🇷🇺 Русский' },
   { code: 'de', label: '🇩🇪 Deutsch' },
   { code: 'uk', label: '🇺🇦 Українська' },
+  { code: 'ru', label: '🇷🇺 Русский' },
 ];
 
 export const isLang = (code) => Object.hasOwn(LOCALES, code);
