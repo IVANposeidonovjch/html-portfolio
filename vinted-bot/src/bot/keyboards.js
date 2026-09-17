@@ -1,14 +1,22 @@
-import { InlineKeyboard, Keyboard } from 'grammy';
+import { InlineKeyboard } from 'grammy';
 import { LANGS, t } from '../i18n/index.js';
 
-export const mainMenu = (lang) =>
-  new Keyboard()
-    .text(t(lang, 'btn.add')).text(t(lang, 'btn.list')).row()
-    .text(t(lang, 'btn.chats')).text(t(lang, 'btn.toggle')).row()
-    .text(t(lang, 'btn.plan')).text(t(lang, 'btn.help')).row()
-    .text(t(lang, 'btn.lang'))
-    .resized()
-    .persistent();
+/**
+ * The menu lives on the bot's own messages, not on a keyboard nailed to the
+ * bottom of the chat. Labels are rendered at send time, so a menu is always in
+ * the language the user has now; the callback data behind them never changes,
+ * so a button pressed in an old message still does the right thing.
+ */
+export const mainMenu = (lang, { monitoring = true } = {}) =>
+  new InlineKeyboard()
+    .text(t(lang, 'btn.add'), 'm:add').text(t(lang, 'btn.list'), 'm:list').row()
+    .text(t(lang, 'btn.chats'), 'm:chats').row()
+    .text(t(lang, monitoring ? 'btn.toggleOn' : 'btn.toggleOff'), 'm:toggle').row()
+    .text(t(lang, 'btn.plan'), 'm:plan').text(t(lang, 'btn.lang'), 'm:lang').row()
+    .text(t(lang, 'btn.help'), 'm:help');
+
+/** Every screen that replaces the menu needs a way back to it. */
+export const backRow = (kb, lang) => kb.text(t(lang, 'kb.menu'), 'm:home');
 
 export const cancelKb = (lang) => new InlineKeyboard().text(t(lang, 'kb.cancel'), 'cancel');
 
@@ -37,10 +45,10 @@ export function topicKb(lang, chat, topics, searchName) {
   return kb.text(t(lang, 'kb.back'), 'dest:back');
 }
 
-export function searchListKb(searches) {
+export function searchListKb(lang, searches) {
   const kb = new InlineKeyboard();
   for (const s of searches) kb.text(`${s.enabled ? '🟢' : '⏸'} ${s.name}`, `s:open:${s.id}`).row();
-  return kb;
+  return backRow(kb, lang);
 }
 
 export function searchKb(lang, search) {
@@ -49,7 +57,8 @@ export function searchKb(lang, search) {
     .text(t(lang, search.enabled ? 'kb.disable' : 'kb.enable'), `s:toggle:${search.id}`)
     .text(t(lang, 'kb.rename'), `s:rename:${search.id}`).row()
     .text(t(lang, 'kb.delete'), `s:del:${search.id}`)
-    .text(t(lang, 'kb.toList'), 's:list');
+    .text(t(lang, 'kb.toList'), 's:list').row()
+    .text(t(lang, 'kb.menu'), 'm:home');
 }
 
 export const confirmDeleteKb = (lang, id) =>
@@ -63,7 +72,7 @@ export function chatsKb(lang, chats, topicsByChat) {
     const label = topics.length ? `${chat.title} · ${topics.length}` : chat.title;
     kb.text(`🗑 ${label}`, `chat:del:${chat.id}`).row();
   }
-  return kb;
+  return backRow(kb, lang);
 }
 
 export const langKb = (current) => {
@@ -71,5 +80,8 @@ export const langKb = (current) => {
   for (const { code, label } of LANGS) {
     kb.text(`${code === current ? '✅ ' : ''}${label}`, `lang:${code}`).row();
   }
-  return kb;
+  return backRow(kb, current);
 };
+
+/** Plan screen and other read-only views: just a way home. */
+export const menuOnlyKb = (lang) => backRow(new InlineKeyboard(), lang);

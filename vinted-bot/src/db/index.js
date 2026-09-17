@@ -12,7 +12,12 @@ db.exec(fs.readFileSync(path.join(here, 'schema.sql'), 'utf8'));
 
 // Migrations for databases created before a column existed. SQLite has no
 // "ADD COLUMN IF NOT EXISTS", so ask the table what it already has.
-for (const [table, column, ddl] of [['users', 'lang', "TEXT NOT NULL DEFAULT 'en'"]]) {
+for (const [table, column, ddl] of [
+  ['users', 'lang', "TEXT NOT NULL DEFAULT 'en'"],
+  // 0 for rows that already existed: those clients still show the old
+  // persistent keyboard, and it has to be taken away from them once.
+  ['users', 'kb_cleared', 'INTEGER NOT NULL DEFAULT 0'],
+]) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
 }
@@ -22,7 +27,7 @@ export const now = () => Math.floor(Date.now() / 1000);
 /* ------------------------------- users -------------------------------- */
 
 const insertUser = db.prepare(
-  `INSERT INTO users (tg_id, username, lang, created_at) VALUES (?, ?, ?, ?)
+  `INSERT INTO users (tg_id, username, lang, kb_cleared, created_at) VALUES (?, ?, ?, 1, ?)
    ON CONFLICT(tg_id) DO UPDATE SET username = excluded.username`,
 );
 const selectUser = db.prepare('SELECT * FROM users WHERE tg_id = ?');
@@ -33,6 +38,7 @@ export function upsertUser(tgId, username, lang = 'en') {
 }
 
 export const setLang = db.prepare('UPDATE users SET lang = ? WHERE tg_id = ?');
+export const markKbCleared = db.prepare('UPDATE users SET kb_cleared = 1 WHERE tg_id = ?');
 export const getUser = (tgId) => selectUser.get(tgId);
 
 export function effectivePlan(user) {

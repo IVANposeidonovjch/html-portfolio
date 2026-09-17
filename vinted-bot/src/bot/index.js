@@ -1,11 +1,12 @@
 import { Bot, GrammyError, InlineKeyboard } from 'grammy';
 import { config, intervalFor, searchLimitFor } from '../config.js';
 import * as store from '../db/index.js';
-import { LANGS, allLabels, isLang, resolveLang, t } from '../i18n/index.js';
+import { LANGS, isLang, resolveLang, t } from '../i18n/index.js';
 import { logger } from '../util/logger.js';
 import { InvalidVintedUrl, parseSearchUrl } from '../vinted/url.js';
 import {
-  cancelKb, chatsKb, confirmDeleteKb, destinationKb, langKb, mainMenu, searchKb, searchListKb, topicKb,
+  backRow, cancelKb, chatsKb, confirmDeleteKb, destinationKb, langKb, mainMenu, menuOnlyKb, searchKb,
+  searchListKb, topicKb,
 } from './keyboards.js';
 
 /** Short-lived per-user wizard state (add-link / rename flows). */
@@ -48,6 +49,24 @@ function who(ctx) {
   return { user, lang: user.lang };
 }
 
+/**
+ * Editing a message to exactly what it already says is a 400 from Telegram, and
+ * it happens whenever someone taps the button for the screen they are on.
+ * Nothing is wrong in that case, so swallow that one description only.
+ */
+async function safeEdit(ctx, text, options) {
+  try {
+    await ctx.editMessageText(text, options);
+  } catch (err) {
+    if (err instanceof GrammyError && /message is not modified/i.test(err.description)) return;
+    throw err;
+  }
+}
+
+/** Reply to a command, or edit the menu message a button was pressed on. */
+const render = (ctx, text, options) =>
+  ctx.callbackQuery ? safeEdit(ctx, text, options) : ctx.reply(text, options);
+
 function topicsByChat(chats) {
   const map = new Map();
   for (const c of chats) map.set(c.id, store.listTopics.all(c.id));
@@ -68,6 +87,23 @@ function destinationTitle(search, ownerId, lang) {
 export function createBot() {
   const bot = new Bot(config.botToken);
 
+  /**
+   * Anyone who used the previous version still has the old keyboard pinned to
+   * the bottom of their chat — the client keeps showing it until a message
+   * explicitly removes it. Do that once, on their next interaction.
+   */
+  bot.chatType('private').use(async (ctx, next) => {
+    const id = ctx.from?.id;
+    const existing = id ? store.getUser(id) : null;
+    if (existing && !existing.kb_cleared) {
+      store.markKbCleared.run(id);
+      await ctx.api
+        .sendMessage(id, t(existing.lang, 'menu.removed'), { reply_markup: { remove_keyboard: true } })
+        .catch(() => {});
+    }
+    await next();
+  });
+
   /* ---------------------------- private: start --------------------------- */
 
   bot.chatType('private').command('start', async (ctx) => {
@@ -80,24 +116,40 @@ export function createBot() {
       is_forum: 0,
       created_at: store.now(),
     });
-    await ctx.reply(t(lang, 'help.text'), { parse_mode: 'HTML', reply_markup: mainMenu(lang) });
+    await showHome(ctx);
   });
 
-  const help = (ctx) => {
-    const { lang } = who(ctx);
-    return ctx.reply(t(lang, 'help.text'), { parse_mode: 'HTML', reply_markup: mainMenu(lang) });
-  };
-  bot.chatType('private').command('help', help);
-  bot.chatType('private').hears(allLabels('btn.help'), help);
+  /** The single message that carries the menu. */
+  async function showHome(ctx, textKey = 'menu.title') {
+    const { user, lang } = who(ctx);
+    await render(ctx, t(lang, textKey), {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      reply_markup: mainMenu(lang, { monitoring: !!user.monitoring_enabled }),
+    });
+  }
+
+  bot.chatType('private').command('help', (ctx) => showHome(ctx, 'help.text'));
+  bot.callbackQuery('m:home', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showHome(ctx);
+  });
+  bot.callbackQuery('m:help', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showHome(ctx, 'help.text');
+  });
 
   /* ------------------------------- language ------------------------------ */
 
   const showLang = (ctx) => {
     const { lang } = who(ctx);
-    return ctx.reply(t(lang, 'lang.choose'), { reply_markup: langKb(lang) });
+    return render(ctx, t(lang, 'lang.choose'), { reply_markup: langKb(lang) });
   };
   bot.chatType('private').command('lang', showLang);
-  bot.chatType('private').hears(allLabels('btn.lang'), showLang);
+  bot.callbackQuery('m:lang', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showLang(ctx);
+  });
 
   bot.callbackQuery(/^lang:(\w+)$/, async (ctx) => {
     const next = ctx.match[1];
@@ -105,9 +157,12 @@ export function createBot() {
     if (!isLang(next)) return;
     who(ctx);
     store.setLang.run(next, ctx.from.id);
-    await ctx.editMessageText(t(next, 'lang.set'), { reply_markup: langKb(next) });
-    // the reply keyboard carries translated labels, so it has to be re-sent
-    await ctx.reply(t(next, 'help.text'), { parse_mode: 'HTML', reply_markup: mainMenu(next) });
+    // one message, rebuilt: the labels come from the new language immediately
+    const user = store.getUser(ctx.from.id);
+    await safeEdit(ctx, `${t(next, 'lang.set')}\n\n${t(next, 'menu.title')}`, {
+      parse_mode: 'HTML',
+      reply_markup: mainMenu(next, { monitoring: !!user.monitoring_enabled }),
+    });
   });
 
   /* ------------------------- groups: /bind, /unbind ---------------------- */
@@ -204,7 +259,7 @@ export function createBot() {
       created_at: store.now(),
     });
     await ctx.reply(t(lang, 'bind.channelOk', { title: origin.chat.title }), {
-      reply_markup: mainMenu(lang),
+      reply_markup: menuOnlyKb(lang),
     });
   });
 
@@ -215,14 +270,23 @@ export function createBot() {
     const plan = store.effectivePlan(user);
     const limit = searchLimitFor(plan);
     if (store.countSearches.get(user.tg_id).n >= limit) {
-      return ctx.reply(t(lang, 'add.limit', { plan: planLabel[plan], limit }));
+      return render(ctx, t(lang, 'add.limit', { plan: planLabel[plan], limit }), {
+        reply_markup: menuOnlyKb(lang),
+      });
     }
     setFlow(ctx.from.id, { step: 'url' });
-    await ctx.reply(t(lang, 'add.askUrl'), { parse_mode: 'HTML', reply_markup: cancelKb(lang) });
+    await render(ctx, t(lang, 'add.askUrl'), {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      reply_markup: cancelKb(lang),
+    });
   };
 
   bot.chatType('private').command('add', startAdd);
-  bot.chatType('private').hears(allLabels('btn.add'), startAdd);
+  bot.callbackQuery('m:add', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await startAdd(ctx);
+  });
 
   /** Store the search and tell the user what happens next. */
   function createSearch(ownerId, lang, flow, chatId, threadId) {
@@ -245,12 +309,11 @@ export function createBot() {
 
   /* ------------------------------ list / edit ---------------------------- */
 
-  const showList = async (ctx, edit = false) => {
+  const showList = async (ctx) => {
     const { user, lang } = who(ctx);
     const searches = store.listSearches.all(user.tg_id);
     if (!searches.length) {
-      const text = t(lang, 'list.empty');
-      return edit ? ctx.editMessageText(text) : ctx.reply(text, { reply_markup: mainMenu(lang) });
+      return render(ctx, t(lang, 'list.empty'), { reply_markup: menuOnlyKb(lang) });
     }
     const plan = store.effectivePlan(user);
     const header = t(lang, 'list.header', {
@@ -260,16 +323,16 @@ export function createBot() {
       seconds: intervalFor(plan),
       plan: planLabel[plan],
     });
-    const opts = { parse_mode: 'HTML', reply_markup: searchListKb(searches) };
-    return edit ? ctx.editMessageText(header, opts) : ctx.reply(header, opts);
+    return render(ctx, header, { parse_mode: 'HTML', reply_markup: searchListKb(lang, searches) });
   };
 
-  bot.chatType('private').command('list', (ctx) => showList(ctx));
-  bot.chatType('private').hears(allLabels('btn.list'), (ctx) => showList(ctx));
-  bot.callbackQuery('s:list', async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await showList(ctx, true);
-  });
+  bot.chatType('private').command('list', showList);
+  for (const trigger of ['m:list', 's:list']) {
+    bot.callbackQuery(trigger, async (ctx) => {
+      await ctx.answerCallbackQuery();
+      await showList(ctx);
+    });
+  }
 
   const searchCard = (search, ownerId, lang) => {
     const lines = [
@@ -337,12 +400,12 @@ export function createBot() {
     const { lang } = who(ctx);
     store.deleteSearch.run(Number(ctx.match[1]), ctx.from.id);
     await ctx.answerCallbackQuery(t(lang, 'delete.done'));
-    await showList(ctx, true);
+    await showList(ctx);
   });
 
   /* -------------------------------- chats -------------------------------- */
 
-  const showChats = async (ctx, edit = false) => {
+  const showChats = async (ctx) => {
     const { user, lang } = who(ctx);
     const chats = store.listChats.all(user.tg_id).filter((c) => c.type !== 'private');
     const map = topicsByChat(chats);
@@ -356,18 +419,23 @@ export function createBot() {
       }
     }
     lines.push('', t(lang, 'chats.hint'));
-    const opts = { parse_mode: 'HTML', reply_markup: chatsKb(lang, chats, map) };
-    return edit ? ctx.editMessageText(lines.join('\n'), opts) : ctx.reply(lines.join('\n'), opts);
+    return render(ctx, lines.join('\n'), {
+      parse_mode: 'HTML',
+      reply_markup: chatsKb(lang, chats, map),
+    });
   };
 
-  bot.chatType('private').command('chats', (ctx) => showChats(ctx));
-  bot.chatType('private').hears(allLabels('btn.chats'), (ctx) => showChats(ctx));
+  bot.chatType('private').command('chats', showChats);
+  bot.callbackQuery('m:chats', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showChats(ctx);
+  });
 
   bot.callbackQuery(/^chat:del:(\d+)$/, async (ctx) => {
     const { lang } = who(ctx);
     store.deleteChat.run(Number(ctx.match[1]), ctx.from.id);
     await ctx.answerCallbackQuery(t(lang, 'chats.unbound'));
-    await showChats(ctx, true);
+    await showChats(ctx);
   });
 
   /* ------------------------- monitoring on / off ------------------------- */
@@ -376,10 +444,19 @@ export function createBot() {
     const { user, lang } = who(ctx);
     const next = forced ?? (user.monitoring_enabled ? 0 : 1);
     store.setMonitoring.run(next, user.tg_id);
-    await ctx.reply(t(lang, next ? 'toggle.on' : 'toggle.off'), { reply_markup: mainMenu(lang) });
+    const text = t(lang, next ? 'toggle.on' : 'toggle.off');
+    if (ctx.callbackQuery) {
+      // the menu button itself shows the state, so redraw it in place
+      await ctx.answerCallbackQuery(text);
+      return safeEdit(ctx, t(lang, 'menu.title'), {
+        parse_mode: 'HTML',
+        reply_markup: mainMenu(lang, { monitoring: !!next }),
+      });
+    }
+    return ctx.reply(text, { reply_markup: mainMenu(lang, { monitoring: !!next }) });
   };
 
-  bot.chatType('private').hears(allLabels('btn.toggle'), (ctx) => toggleMonitoring(ctx));
+  bot.callbackQuery('m:toggle', (ctx) => toggleMonitoring(ctx));
   bot.chatType('private').command('pause', (ctx) => toggleMonitoring(ctx, 0));
   bot.chatType('private').command('resume', (ctx) => toggleMonitoring(ctx, 1));
 
@@ -408,14 +485,17 @@ export function createBot() {
     const kb = new InlineKeyboard();
     if (config.payments.basicStars) kb.text(`Basic · ${config.payments.basicStars} ⭐`, 'buy:basic');
     if (config.payments.proStars) kb.text(`Pro · ${config.payments.proStars} ⭐`, 'buy:pro');
-    await ctx.reply(lines.join('\n'), {
+    await render(ctx, lines.join('\n'), {
       parse_mode: 'HTML',
-      reply_markup: kb.inline_keyboard.flat().length ? kb : mainMenu(lang),
+      reply_markup: backRow(kb, lang),
     });
   };
 
   bot.chatType('private').command('plan', showPlan);
-  bot.chatType('private').hears(allLabels('btn.plan'), showPlan);
+  bot.callbackQuery('m:plan', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showPlan(ctx);
+  });
 
   bot.callbackQuery(/^buy:(basic|pro)$/, async (ctx) => {
     const { lang } = who(ctx);
@@ -625,7 +705,9 @@ export function createBot() {
         setFlow(ctx.from.id, { step: 'url' });
         return handleUrl(ctx, lang, text);
       }
-      return ctx.reply(t(lang, 'common.notUnderstood'), { reply_markup: mainMenu(lang) });
+      return ctx.reply(t(lang, 'common.notUnderstood'), {
+        reply_markup: mainMenu(lang, { monitoring: !!store.getUser(ctx.from.id).monitoring_enabled }),
+      });
     }
 
     if (flow.step === 'url') return handleUrl(ctx, lang, text);
@@ -642,7 +724,7 @@ export function createBot() {
     if (flow.step === 'rename') {
       store.renameSearch.run(text.slice(0, 64), flow.searchId, ctx.from.id);
       flows.delete(ctx.from.id);
-      return ctx.reply(t(lang, 'rename.ok'), { reply_markup: mainMenu(lang) });
+      return ctx.reply(t(lang, 'rename.ok'), { reply_markup: menuOnlyKb(lang) });
     }
   });
 

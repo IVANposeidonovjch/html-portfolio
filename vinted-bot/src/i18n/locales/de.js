@@ -139,4 +139,11 @@ Beispiel:
   'cmd.userinfo': 'Ein Nutzer im Detail',
   'cmd.stats': 'Systemstatistik',
   'cmd.grant': 'Tarif vergeben',
+
+  // inline menu
+  'menu.removed': 'Das Menü steckt jetzt in Buttons unter den Nachrichten — die untere Tastatur entfällt.',
+  'menu.title': '<b>Vinted Monitor</b>\nAktion wählen:',
+  'btn.toggleOn': '⏸ Überwachung: an',
+  'btn.toggleOff': '▶️ Überwachung: aus',
+  'kb.menu': '⬅️ Menü',
 };

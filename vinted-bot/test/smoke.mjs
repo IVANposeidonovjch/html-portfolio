@@ -447,6 +447,46 @@ test('a group upgraded to a supergroup takes its searches with it', () => {
   }
 });
 
+/* ---------------------------- inline menu ------------------------------- */
+
+const { mainMenu, menuOnlyKb } = await import('../src/bot/keyboards.js');
+
+test('the menu is an inline keyboard, not a keyboard pinned to the chat', () => {
+  const kb = mainMenu('ru', { monitoring: true });
+  assert.ok(Array.isArray(kb.inline_keyboard), 'must be inline_keyboard');
+  assert.equal(kb.keyboard, undefined, 'a reply keyboard would take over the input area');
+  const buttons = kb.inline_keyboard.flat();
+  assert.deepEqual(
+    buttons.map((b) => b.callback_data),
+    ['m:add', 'm:list', 'm:chats', 'm:toggle', 'm:plan', 'm:lang', 'm:help'],
+  );
+  assert.ok(buttons.every((b) => typeof b.callback_data === 'string'), 'every button carries an action');
+});
+
+test('the toggle button shows the current state', () => {
+  const on = mainMenu('ru', { monitoring: true }).inline_keyboard.flat().find((b) => b.callback_data === 'm:toggle');
+  const off = mainMenu('ru', { monitoring: false }).inline_keyboard.flat().find((b) => b.callback_data === 'm:toggle');
+  assert.equal(on.text, LOCALES.ru['btn.toggleOn']);
+  assert.equal(off.text, LOCALES.ru['btn.toggleOff']);
+});
+
+test('labels follow the language while the actions behind them never change', () => {
+  const byLang = Object.keys(LOCALES).map((lang) => mainMenu(lang, {}).inline_keyboard.flat());
+  const actions = byLang.map((buttons) => buttons.map((b) => b.callback_data));
+  for (const set of actions) assert.deepEqual(set, actions[0], 'callback data must be language independent');
+  // ...which is why a button pressed in an old message still works after a switch
+  for (const [i, lang] of Object.keys(LOCALES).entries()) {
+    assert.equal(byLang[i].find((b) => b.callback_data === 'm:add').text, LOCALES[lang]['btn.add']);
+  }
+});
+
+test('every screen offers a way back to the menu', () => {
+  const back = menuOnlyKb('de').inline_keyboard.flat();
+  assert.equal(back.length, 1);
+  assert.equal(back[0].callback_data, 'm:home');
+  assert.equal(back[0].text, LOCALES.de['kb.menu']);
+});
+
 /* --------------------------- command menu ------------------------------- */
 
 const { publishCommands, buildCommands, COMMAND_SETS } = await import('../src/bot/commands.js');
@@ -538,6 +578,51 @@ await (async () => {
 
 const { createBot } = await import('../src/bot/index.js');
 
+/** Drive a real update through the bot, capturing every API call it makes. */
+async function drive(update, fromId) {
+  const bot = createBot();
+  const calls = [];
+  bot.api.config.use(async (prev, method, payload) => {
+    calls.push({ method, payload });
+    return { ok: true, result: { message_id: 1, date: 0, chat: { id: fromId, type: 'private' } } };
+  });
+  bot.botInfo = { id: 111, is_bot: true, first_name: 'T', username: 'testbot', can_join_groups: true,
+    can_read_all_group_messages: false, supports_inline_queries: false, can_connect_to_business: false,
+    has_main_web_app: false };
+  await bot.handleUpdate(update);
+  return calls;
+}
+
+const from = (id) => ({ id, is_bot: false, first_name: 'A', username: 'admin', language_code: 'ru' });
+
+const textUpdate = (text, fromId, entities) => ({
+  update_id: Math.floor(Math.random() * 1e6),
+  message: {
+    message_id: 1,
+    date: Math.floor(Date.now() / 1000),
+    chat: { id: fromId, type: 'private' },
+    from: from(fromId),
+    text,
+    ...(entities ? { entities } : {}),
+  },
+});
+
+const pressUpdate = (data, fromId) => ({
+  update_id: Math.floor(Math.random() * 1e6),
+  callback_query: {
+    id: String(Math.floor(Math.random() * 1e6)),
+    from: from(fromId),
+    chat_instance: '1',
+    data,
+    message: {
+      message_id: 10,
+      date: Math.floor(Date.now() / 1000),
+      chat: { id: fromId, type: 'private' },
+      text: 'menu',
+    },
+  },
+});
+
 /** Drive a real command through the bot, capturing what it would have sent. */
 async function runCommand(text, fromId, extra = {}) {
   const bot = createBot();
@@ -563,6 +648,89 @@ async function runCommand(text, fromId, extra = {}) {
   });
   return sent.filter((c) => c.method === 'sendMessage').map((c) => c.payload.text).join('\n');
 }
+
+/* ----------------------- inline menu, end to end ------------------------ */
+
+await (async () => {
+  const UID = 5150;
+  store.upsertUser(UID, 'menuser', 'ru');
+
+  const start = await drive(
+    textUpdate('/start', UID, [{ type: 'bot_command', offset: 0, length: 6 }]),
+    UID,
+  );
+  test('/start sends the menu as inline buttons and no reply keyboard', () => {
+    const msg = start.find((c) => c.method === 'sendMessage');
+    assert.ok(msg, 'a message must be sent');
+    assert.ok(msg.payload.reply_markup.inline_keyboard, 'menu must be inline');
+    assert.equal(msg.payload.reply_markup.keyboard, undefined);
+    assert.ok(!start.some((c) => c.payload?.reply_markup?.keyboard), 'nothing may pin a keyboard');
+  });
+
+  const pressed = await drive(pressUpdate('m:toggle', UID), UID);
+  test('pressing a menu button edits that message instead of sending a new one', () => {
+    assert.ok(pressed.some((c) => c.method === 'answerCallbackQuery'), 'the tap must be acknowledged');
+    assert.ok(pressed.some((c) => c.method === 'editMessageText'), 'the menu is redrawn in place');
+    assert.ok(!pressed.some((c) => c.method === 'sendMessage'), 'no new message may be posted');
+    assert.equal(store.getUser(UID).monitoring_enabled, 0, 'and the toggle actually toggled');
+  });
+
+  const back = await drive(pressUpdate('m:home', UID), UID);
+  test('the redrawn menu reflects the new state', () => {
+    const edit = back.find((c) => c.method === 'editMessageText');
+    const toggle = edit.payload.reply_markup.inline_keyboard.flat().find((b) => b.callback_data === 'm:toggle');
+    assert.equal(toggle.text, LOCALES.ru['btn.toggleOff'], 'monitoring is off, the button must say so');
+  });
+  store.setMonitoring.run(1, UID);
+
+  // the language-mismatch bug: the pinned keyboard kept the old labels until
+  // something re-sent it, so the menu could sit in a language the user had left
+  const switched = await drive(pressUpdate('lang:de', UID), UID);
+  test('switching language redraws the menu in that language immediately', () => {
+    const edit = switched.find((c) => c.method === 'editMessageText');
+    assert.ok(edit, 'the same message is rewritten, no second menu is posted');
+    assert.ok(!switched.some((c) => c.method === 'sendMessage'), 'and nothing extra is sent');
+    const labels = edit.payload.reply_markup.inline_keyboard.flat().map((b) => b.text);
+    assert.ok(labels.includes(LOCALES.de['btn.add']), `menu still not German: ${labels.join('|')}`);
+    assert.ok(!labels.includes(LOCALES.ru['btn.add']), 'no Russian label may survive the switch');
+    assert.equal(store.getUser(UID).lang, 'de');
+  });
+
+  const afterSwitch = await drive(pressUpdate('m:list', UID), UID);
+  test('screens opened after the switch are German too', () => {
+    const edit = afterSwitch.find((c) => c.method === 'editMessageText');
+    const back = edit.payload.reply_markup.inline_keyboard.flat().at(-1);
+    assert.equal(back.text, LOCALES.de['kb.menu']);
+  });
+  store.setLang.run('ru', UID);
+
+  const typedLabel = await drive(textUpdate(LOCALES.ru['btn.add'], UID), UID);
+  test('the old button captions are just text now, they start nothing', () => {
+    const reply = typedLabel.find((c) => c.method === 'sendMessage');
+    assert.match(reply.payload.text, /Не понял/, 'typing the old label must not open the add flow');
+    assert.ok(!reply.payload.text.includes('vinted.de/catalog'), 'the URL prompt must not appear');
+  });
+
+  // a user carried over from the reply-keyboard era
+  store.db.prepare('UPDATE users SET kb_cleared = 0 WHERE tg_id = ?').run(UID);
+  const firstTouch = await drive(pressUpdate('m:home', UID), UID);
+  test('the old pinned keyboard is taken away once, from users who had it', () => {
+    const removal = firstTouch.find((c) => c.payload?.reply_markup?.remove_keyboard);
+    assert.ok(removal, 'the client keeps showing the old keyboard until a message removes it');
+    assert.equal(removal.payload.text, LOCALES.ru['menu.removed']);
+    assert.equal(store.getUser(UID).kb_cleared, 1);
+  });
+
+  const secondTouch = await drive(pressUpdate('m:home', UID), UID);
+  test('and never again after that', () => {
+    assert.ok(!secondTouch.some((c) => c.payload?.reply_markup?.remove_keyboard));
+  });
+
+  test('a brand new user is never told about a keyboard they never had', () => {
+    store.upsertUser(5151, 'fresh', 'en');
+    assert.equal(store.getUser(5151).kb_cleared, 1);
+  });
+})();
 
 await (async () => {
   // a user with a hostile display name: the report must not break on it

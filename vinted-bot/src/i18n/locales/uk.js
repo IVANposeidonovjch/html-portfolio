@@ -139,4 +139,11 @@ export const uk = {
   'cmd.userinfo': 'Дані користувача',
   'cmd.stats': 'Статистика системи',
   'cmd.grant': 'Видати тариф',
+
+  // inline menu
+  'menu.removed': 'Меню переїхало в кнопки під повідомленнями — нижня клавіатура більше не потрібна.',
+  'menu.title': '<b>Vinted Monitor</b>\nОбери дію:',
+  'btn.toggleOn': '⏸ Моніторинг: увімкнено',
+  'btn.toggleOff': '▶️ Моніторинг: вимкнено',
+  'kb.menu': '⬅️ Меню',
 };

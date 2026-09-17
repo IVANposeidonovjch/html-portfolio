@@ -139,4 +139,11 @@ export const ru = {
   'cmd.userinfo': 'Данные пользователя',
   'cmd.stats': 'Статистика системы',
   'cmd.grant': 'Выдать тариф',
+
+  // inline menu
+  'menu.removed': 'Меню переехало в кнопки под сообщениями — нижняя клавиатура больше не нужна.',
+  'menu.title': '<b>Vinted Monitor</b>\nВыбери действие:',
+  'btn.toggleOn': '⏸ Мониторинг: включён',
+  'btn.toggleOff': '▶️ Мониторинг: выключен',
+  'kb.menu': '⬅️ Меню',
 };
