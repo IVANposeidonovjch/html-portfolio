@@ -39,7 +39,7 @@ export function normalizeItem(raw, domain) {
     id,
     title: pick(raw.title, box.first_line) || 'Без названия',
     brand: pick(raw.brand_title, raw.brand?.title, box.first_line),
-    size: pick(raw.size_title, raw.size, box.second_line),
+        size: pick(raw.size_title, raw.size),
     condition: pick(raw.status, raw.condition, box.third_line),
     price: money(pick(raw.price, box.price)),
     totalPrice: money(pick(raw.total_item_price, box.total_item_price)), // incl. buyer protection
