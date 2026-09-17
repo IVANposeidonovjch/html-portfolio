@@ -16,6 +16,7 @@ const { parseSearchUrl, InvalidVintedUrl } = await import('../src/vinted/url.js'
 const store = await import('../src/db/index.js');
 const { Monitor } = await import('../src/monitor/scheduler.js');
 const { renderItem } = await import('../src/bot/format.js');
+const { STRATEGIES, extractItems, strategyByName } = await import('../src/vinted/endpoints.js');
 const { normalizeItem } = await import('../src/vinted/normalize.js');
 
 let failures = 0;
@@ -51,6 +52,47 @@ test('rejects non-Vinted, item and filterless URLs', () => {
     'https://www.vinted.de/catalog',
     'not a url',
   ]) assert.throws(() => parseSearchUrl(bad), InvalidVintedUrl, bad);
+});
+
+/* ------------------------------- endpoints ------------------------------ */
+
+test('svc-catalogue variants target the api host, legacy stays on www', () => {
+  const q = { brand_ids: '5,9', search_text: 'raf' };
+  const u = (n) => strategyByName(n).url('www.vinted.de', q, { perPage: 5 });
+  assert.match(u('svc-catalogue'), /^https:\/\/api\.vinted\.de\/svc-catalogue\/items\?/);
+  assert.match(u('svc-catalogue-www'), /^https:\/\/api\.www\.vinted\.de\/svc-catalogue\/items\?/);
+  assert.match(u('legacy-catalog'), /^https:\/\/www\.vinted\.de\/api\/v2\/catalog\/items\?/);
+  for (const name of ['svc-catalogue', 'legacy-catalog']) {
+    assert.match(u(name), /per_page=5/);
+    assert.match(u(name), /order=newest_first/);
+  }
+});
+
+test('the attribute variant folds *_ids filters into attribute_ids[...]', () => {
+  const url = strategyByName('svc-catalogue-attrs').url(
+    'www.vinted.de',
+    { brand_ids: '5,9', catalog_ids: '2050', price_to: '300', search_text: 'raf' },
+  );
+  const sp = new URL(url).searchParams;
+  assert.equal(sp.get('attribute_ids[brand]'), '5,9');
+  assert.equal(sp.get('attribute_ids[catalog]'), '2050');
+  assert.equal(sp.get('price_to'), '300', 'non-id filters must pass through untouched');
+  assert.equal(sp.get('search_text'), 'raf');
+});
+
+test('every strategy is reachable by name and produces a valid URL', () => {
+  for (const s of STRATEGIES) {
+    assert.equal(strategyByName(s.name), s);
+    assert.doesNotThrow(() => new URL(s.url('www.vinted.fr', { search_text: 'x' })));
+  }
+});
+
+test('item arrays are found under every shape seen so far', () => {
+  assert.deepEqual(extractItems({ items: [1] }), [1]);
+  assert.deepEqual(extractItems({ catalogItems: [2] }), [2]);
+  assert.deepEqual(extractItems({ data: { items: [3] } }), [3]);
+  assert.equal(extractItems({ error: 'nope' }), null, 'an error body must not look like a hit');
+  assert.equal(extractItems(null), null);
 });
 
 /* ------------------------------ normalizing ----------------------------- */

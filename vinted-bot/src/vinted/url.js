@@ -10,6 +10,8 @@
  * generically instead of hardcoding a filter list.
  */
 
+import { strategyByName } from './endpoints.js';
+
 const HOST_RE = /^(www\.)?vinted\.[a-z.]{2,6}$/i;
 
 // URL params that must not reach the API, or that we always set ourselves
@@ -66,11 +68,7 @@ export function parseSearchUrl(raw) {
   };
 }
 
-export function apiUrl(domain, query, { page = 1, perPage = 40 } = {}) {
-  const sp = new URLSearchParams(query);
-  sp.set('page', String(page));
-  sp.set('per_page', String(perPage));
-  sp.set('order', 'newest_first');
-  sp.set('time', String(Math.floor(Date.now() / 1000)));
-  return `https://${domain}/api/v2/catalog/items?${sp.toString()}`;
+export function apiUrl(domain, query, opts = {}) {
+  // Kept for tooling and tests; the client resolves the live endpoint itself.
+  return strategyByName('legacy-catalog').url(domain, query, opts);
 }

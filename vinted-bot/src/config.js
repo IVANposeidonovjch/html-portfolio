@@ -27,6 +27,8 @@ export const config = {
     rps: num(process.env.VINTED_RPS, 1.5),
     perPage: num(process.env.VINTED_PER_PAGE, 40),
     firstRunMaxAgeMin: num(process.env.FIRST_RUN_MAX_AGE_MIN, 0),
+    // pin one entry of src/vinted/endpoints.js; empty = detect at runtime
+    strategy: process.env.VINTED_API_STRATEGY || '',
     proxies: list(process.env.PROXIES),
     userAgent:
       process.env.USER_AGENT ||

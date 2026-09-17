@@ -2,15 +2,17 @@ import { ProxyAgent, request } from 'undici';
 import { config } from '../config.js';
 import { logger } from '../util/logger.js';
 import { TokenBucket, sleep } from '../util/ratelimit.js';
-import { apiUrl } from './url.js';
+import { STRATEGIES, extractItems, strategyByName } from './endpoints.js';
 
 /**
- * Vinted has no public API. Its own web app calls
- *   GET /api/v2/catalog/items?...
- * with the session cookies the site hands out on first visit. So we do exactly
- * that: bootstrap a session by loading the homepage, keep the cookie jar, and
- * refresh it whenever the API answers 401/403.
+ * Vinted has no public API. Its own web app talks to an internal catalog
+ * service, so we do the same: bootstrap a session by loading the homepage,
+ * keep the cookie jar and the CSRF token, and call the catalog service with
+ * them. Which URL that service lives at is discovered at runtime — see
+ * endpoints.js for why.
  */
+
+const CSRF_RE = /<meta[^>]+name=["']csrf-token["'][^>]+content=["']([^"']+)["']/i;
 
 class Session {
   constructor(domain, proxy) {
@@ -18,6 +20,7 @@ class Session {
     this.proxy = proxy || null;
     this.dispatcher = proxy ? new ProxyAgent(proxy) : undefined;
     this.cookies = new Map();
+    this.csrfToken = null;
     this.bootstrappedAt = 0;
     this.bootstrapping = null;
     this.blockedUntil = 0;
@@ -46,7 +49,20 @@ class Session {
     };
   }
 
-  /** Load the homepage once to obtain anon/session/access-token cookies. */
+  /** Headers the web app sends alongside cookies on catalog calls. */
+  apiHeaders() {
+    const anonId = this.cookies.get('anon_id');
+    return this.headers({
+      accept: 'application/json, text/plain, */*',
+      'x-requested-with': 'XMLHttpRequest',
+      referer: `https://${this.domain}/catalog`,
+      origin: `https://${this.domain}`,
+      ...(anonId ? { 'x-anon-id': anonId } : {}),
+      ...(this.csrfToken ? { 'x-csrf-token': this.csrfToken } : {}),
+    });
+  }
+
+  /** Load the homepage once to obtain cookies and the CSRF token. */
   async bootstrap(force = false) {
     if (!force && this.cookies.size && Date.now() - this.bootstrappedAt < 30 * 60_000) return;
     if (this.bootstrapping) return this.bootstrapping;
@@ -61,9 +77,13 @@ class Session {
         maxRedirections: 3,
       });
       this.storeCookies(res.headers);
-      await res.body.dump();
+      const html = await res.body.text().catch(() => '');
+      this.csrfToken = html.match(CSRF_RE)?.[1] || null;
       this.bootstrappedAt = Date.now();
-      logger.debug(`vinted session ready domain=${this.domain} proxy=${this.proxy ?? 'direct'} cookies=${this.cookies.size}`);
+      logger.debug(
+        `vinted session ready domain=${this.domain} proxy=${this.proxy ?? 'direct'} ` +
+          `cookies=${this.cookies.size} csrf=${this.csrfToken ? 'yes' : 'no'}`,
+      );
     })().finally(() => {
       this.bootstrapping = null;
     });
@@ -72,14 +92,16 @@ class Session {
 }
 
 export class VintedError extends Error {
-  constructor(message, status) {
+  constructor(message, status, { endpointGone = false } = {}) {
     super(message);
     this.status = status;
+    this.endpointGone = endpointGone;
   }
 }
 
 const buckets = new Map(); // domain -> TokenBucket
 const sessions = new Map(); // `${domain}|${proxy}` -> Session
+const resolved = new Map(); // domain -> strategy that last returned items
 let proxyCursor = 0;
 
 function bucketFor(domain) {
@@ -104,6 +126,56 @@ function sessionFor(domain) {
   return usable[proxyCursor++ % usable.length];
 }
 
+/** Strategies to try for a domain, best known first. */
+export function candidatesFor(domain) {
+  const pinned = config.vinted.strategy && strategyByName(config.vinted.strategy);
+  if (pinned) return [pinned];
+  const known = resolved.get(domain);
+  return known ? [known, ...STRATEGIES.filter((s) => s !== known)] : [...STRATEGIES];
+}
+
+const isHtml = (headers) => /text\/html/i.test(headers['content-type'] || '');
+
+/** One HTTP call against one strategy. Returns items, or an explanatory error. */
+async function tryStrategy(session, strategy, domain, query, perPage) {
+  const url = strategy.url(domain, query, { perPage });
+  const res = await request(url, {
+    method: 'GET',
+    dispatcher: session.dispatcher,
+    headers: session.apiHeaders(),
+  });
+  session.storeCookies(res.headers);
+
+  if (res.statusCode === 200 && !isHtml(res.headers)) {
+    const body = await res.body.json().catch(() => null);
+    const items = extractItems(body);
+    if (items) return { items, url };
+    return {
+      error: new VintedError(
+        `${strategy.name}: 200 but no item array (keys: ${Object.keys(body || {}).join(',') || 'none'})`,
+        200,
+        { endpointGone: true },
+      ),
+      url,
+    };
+  }
+
+  await res.body.dump();
+
+  // 404, or a 200 that is really the website's HTML shell: this path is gone.
+  if (res.statusCode === 404 || isHtml(res.headers)) {
+    return {
+      error: new VintedError(
+        `${strategy.name}: эндпоинт не отвечает JSON (HTTP ${res.statusCode}${isHtml(res.headers) ? ', HTML-страница' : ''}) — путь перенесён`,
+        res.statusCode,
+        { endpointGone: true },
+      ),
+      url,
+    };
+  }
+  return { error: new VintedError(`${strategy.name}: HTTP ${res.statusCode}`, res.statusCode), url };
+}
+
 /**
  * Fetch the newest page of a catalog search.
  * @returns {Promise<object[]>} raw Vinted item objects, newest first
@@ -114,44 +186,54 @@ export async function fetchCatalog(domain, query, { perPage = config.vinted.perP
 
   for (let attempt = 0; attempt < 3; attempt++) {
     await session.bootstrap(attempt > 0);
-    const url = apiUrl(domain, query, { perPage });
-    const res = await request(url, {
-      method: 'GET',
-      dispatcher: session.dispatcher,
-      headers: session.headers({
-        accept: 'application/json, text/plain, */*',
-        'x-requested-with': 'XMLHttpRequest',
-        referer: `https://${domain}/catalog`,
-      }),
-    });
-    session.storeCookies(res.headers);
 
-    if (res.statusCode === 200) {
-      const body = await res.body.json();
-      return Array.isArray(body?.items) ? body.items : [];
-    }
+    const gone = [];
+    for (const strategy of candidatesFor(domain)) {
+      const { items, error, url } = await tryStrategy(session, strategy, domain, query, perPage);
 
-    const text = await res.body.text().catch(() => '');
-    if (res.statusCode === 401 || res.statusCode === 403) {
-      // expired or missing token -> re-bootstrap and retry once more
-      session.cookies.clear();
-      if (attempt === 2) {
-        session.blockedUntil = Date.now() + 60_000;
-        throw new VintedError(`Vinted отклонил запрос (${res.statusCode})`, res.statusCode);
+      if (items) {
+        if (resolved.get(domain) !== strategy) {
+          resolved.set(domain, strategy);
+          logger.info(`vinted endpoint for ${domain}: ${strategy.name} (${strategy.note}) — ${url}`);
+        }
+        return items;
       }
-      await sleep(500 * (attempt + 1));
-      continue;
+
+      // Auth problems mean the session, not the endpoint: re-bootstrap and retry.
+      if (error.status === 401 || error.status === 403) {
+        session.cookies.clear();
+        session.csrfToken = null;
+        if (attempt === 2) {
+          session.blockedUntil = Date.now() + 60_000;
+          throw new VintedError(`Vinted отклонил запрос (${error.status})`, error.status);
+        }
+        await sleep(500 * (attempt + 1));
+        break; // back to the outer loop for a fresh session
+      }
+      if (error.status === 429) {
+        const retryAfter = 60;
+        session.blockedUntil = Date.now() + retryAfter * 1000;
+        throw new VintedError(`Слишком много запросов (429), пауза ${retryAfter}s`, 429);
+      }
+      if (error.status >= 500) {
+        if (attempt === 2) throw error;
+        await sleep(1000 * (attempt + 1));
+        break;
+      }
+
+      gone.push(error.message);
+      if (resolved.get(domain) === strategy) resolved.delete(domain); // it moved again
+      await bucketFor(domain).take(); // stay polite while walking candidates
     }
-    if (res.statusCode === 429) {
-      const retryAfter = Number(res.headers['retry-after']) || 60;
-      session.blockedUntil = Date.now() + retryAfter * 1000;
-      throw new VintedError(`Слишком много запросов (429), пауза ${retryAfter}s`, 429);
+
+    if (gone.length) {
+      throw new VintedError(
+        `Ни один известный эндпоинт каталога не отвечает. Проверено: ${gone.join(' | ')}. ` +
+          'Запусти tools/probe.mjs на боевом IP, чтобы снять актуальный адрес.',
+        404,
+        { endpointGone: true },
+      );
     }
-    if (res.statusCode >= 500 && attempt < 2) {
-      await sleep(1000 * (attempt + 1));
-      continue;
-    }
-    throw new VintedError(`HTTP ${res.statusCode}: ${text.slice(0, 120)}`, res.statusCode);
   }
   throw new VintedError('Не удалось получить данные Vinted', 0);
 }
@@ -161,6 +243,8 @@ export function poolStatus() {
     domain: s.domain,
     proxy: s.proxy ?? 'direct',
     cookies: s.cookies.size,
+    csrf: !!s.csrfToken,
+    endpoint: resolved.get(s.domain)?.name ?? 'не определён',
     blockedFor: Math.max(0, Math.round((s.blockedUntil - Date.now()) / 1000)),
   }));
 }
