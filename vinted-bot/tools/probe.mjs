@@ -12,6 +12,11 @@
  *
  * Paste the "REPORT" block back into the chat — it is everything needed to pin
  * the endpoint in src/vinted/endpoints.js.
+ *
+ * For the filter-efficacy check (does brand filtering actually narrow the
+ * results, or does the service answer 200 and ignore it?) use
+ * tools/probe-standalone.mjs — it runs the same search with and without the
+ * filters and compares the two answers.
  */
 import { ProxyAgent, request } from 'undici';
 import { STRATEGIES, extractItems } from '../src/vinted/endpoints.js';

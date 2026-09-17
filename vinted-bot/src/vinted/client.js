@@ -2,7 +2,7 @@ import { ProxyAgent, request } from 'undici';
 import { config } from '../config.js';
 import { logger } from '../util/logger.js';
 import { TokenBucket, sleep } from '../util/ratelimit.js';
-import { STRATEGIES, extractItems, strategyByName } from './endpoints.js';
+import { extractItems, filtersLookHonoured, orderedStrategies, strategyByName } from './endpoints.js';
 
 /**
  * Vinted has no public API. Its own web app talks to an internal catalog
@@ -50,8 +50,9 @@ class Session {
   }
 
   /**
-   * Two header sets. `plain` is what the confirmed working call actually sent;
-   * `full` adds the origin / anon-id / CSRF trio the old endpoint wanted.
+   * Two header sets. `plain` is cookies only — what the probe's working call
+   * sent. `full` adds what the Vintrack fix sends: anon id, CSRF token and the
+   * app marker, plus the fetch-metadata headers a browser would attach.
    * Which one a variant needs is measured, not assumed — see endpoints.js.
    */
   apiHeaders(kind = 'plain') {
@@ -64,7 +65,11 @@ class Session {
     return this.headers({
       ...base,
       'x-requested-with': 'XMLHttpRequest',
+      'x-next-app': 'marketplace-web',
       origin: `https://${this.domain}`,
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-site': 'same-site',
       ...(anonId ? { 'x-anon-id': anonId } : {}),
       ...(this.csrfToken ? { 'x-csrf-token': this.csrfToken } : {}),
     });
@@ -134,12 +139,16 @@ function sessionFor(domain) {
   return usable[proxyCursor++ % usable.length];
 }
 
-/** (strategy, header set) pairs to try for a domain, best known first. */
-export function candidatesFor(domain) {
+/**
+ * (strategy, header set) pairs to try, best known first. The order depends on
+ * the query: id filters lead with the attribute shape, text-only searches with
+ * the plain one — see orderedStrategies().
+ */
+export function candidatesFor(domain, query = {}) {
   const flip = (kind) => (kind === 'plain' ? 'full' : 'plain');
   const pinned = config.vinted.strategy && strategyByName(config.vinted.strategy);
   const pairs = [];
-  for (const strategy of pinned ? [pinned] : STRATEGIES) {
+  for (const strategy of pinned ? [pinned] : orderedStrategies(query)) {
     const preferred = strategy.headers || 'plain';
     pairs.push({ strategy, headerKind: preferred }, { strategy, headerKind: flip(preferred) });
   }
@@ -209,16 +218,28 @@ export async function fetchCatalog(domain, query, { perPage = config.vinted.perP
 
     const gone = [];
     let sawForbidden = false;
-    for (const pair of candidatesFor(domain)) {
+    for (const pair of candidatesFor(domain, query)) {
       const { strategy, headerKind } = pair;
       const { items, error, url } = await tryStrategy(session, pair, domain, query, perPage);
 
       if (items) {
+        // 200 with listings is not success on its own: the service may answer
+        // while silently dropping the filters. A variant that hands back other
+        // brands is worse than one that fails, so keep walking.
+        const verdict = filtersLookHonoured(query, items);
+        if (verdict && !verdict.ok) {
+          gone.push(`${strategy.name}/${headerKind}: фильтры проигнорированы (${verdict.detail})`);
+          if (resolved.get(domain)?.strategy === strategy) resolved.delete(domain);
+          await bucketFor(domain).take();
+          continue;
+        }
+
         const known = resolved.get(domain);
         if (known?.strategy !== strategy || known?.headerKind !== headerKind) {
           resolved.set(domain, pair);
           logger.info(
-            `vinted endpoint for ${domain}: ${strategy.name} headers=${headerKind} (${strategy.note}) — ${url}`,
+            `vinted endpoint for ${domain}: ${strategy.name} headers=${headerKind} (${strategy.note})` +
+              `${verdict ? `, фильтры соблюдаются: ${verdict.detail}` : ''} — ${url}`,
           );
         }
         return items;
@@ -263,7 +284,7 @@ export async function fetchCatalog(domain, query, { perPage = config.vinted.perP
 
     if (gone.length) {
       throw new VintedError(
-        `Ни один известный эндпоинт каталога не отвечает. Проверено: ${gone.join(' | ')}.` +
+        `Ни один вариант каталога не отдал корректно отфильтрованную выдачу. Проверено: ${gone.join(' | ')}.` +
           (sawForbidden && !session.proxy ? ' Часть ответов — 403 с прямого IP: нужен резидентный прокси.' : '') +
           ' Запусти tools/probe-standalone.mjs на боевом IP, чтобы снять актуальный адрес.',
         404,

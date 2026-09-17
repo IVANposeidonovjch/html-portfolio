@@ -16,7 +16,8 @@ const { parseSearchUrl, InvalidVintedUrl } = await import('../src/vinted/url.js'
 const store = await import('../src/db/index.js');
 const { Monitor } = await import('../src/monitor/scheduler.js');
 const { renderItem } = await import('../src/bot/format.js');
-const { STRATEGIES, extractItems, strategyByName } = await import('../src/vinted/endpoints.js');
+const { STRATEGIES, extractItems, strategyByName, orderedStrategies, filtersLookHonoured } =
+  await import('../src/vinted/endpoints.js');
 const { candidatesFor } = await import('../src/vinted/client.js');
 const { normalizeItem } = await import('../src/vinted/normalize.js');
 
@@ -96,16 +97,43 @@ test('item arrays are found under every shape seen so far', () => {
   assert.equal(extractItems(null), null);
 });
 
-test('the confirmed variant is tried first, with the header set it was confirmed with', () => {
-  const pairs = candidatesFor('www.vinted.de');
+test('a text-only search leads with the plain shape it was confirmed with', () => {
+  const pairs = candidatesFor('www.vinted.de', { search_text: 'raf' });
   assert.equal(pairs[0].strategy.name, 'svc-catalogue');
   assert.equal(pairs[0].headerKind, 'plain');
-  // every variant also gets a shot with the other header set
   assert.equal(pairs.length, STRATEGIES.length * 2);
   assert.ok(
     pairs.some((p) => p.strategy.name === 'svc-catalogue' && p.headerKind === 'full'),
     'the alternate header set must stay reachable as a fallback',
   );
+});
+
+test('a search with id filters leads with the attribute shape and full headers', () => {
+  const pairs = candidatesFor('www.vinted.de', { brand_ids: '5', search_text: 'raf' });
+  assert.equal(pairs[0].strategy.name, 'svc-catalogue-attrs');
+  assert.equal(pairs[0].headerKind, 'full');
+  assert.equal(orderedStrategies({ catalog_ids: '2050' })[0].name, 'svc-catalogue-attrs');
+  assert.equal(orderedStrategies({ price_to: '300' })[0].name, 'svc-catalogue');
+});
+
+test('a response that ignored the brand filter is rejected, not cached', () => {
+  const query = { brand_ids: '5' };
+  const withIds = (ids) => ids.map((brand_id, n) => ({ id: n, brand_id }));
+
+  // strong signal: items carry brand_id
+  assert.equal(filtersLookHonoured(query, withIds([5, 5, 5])).ok, true);
+  assert.equal(filtersLookHonoured(query, withIds([5, 9, 12])).ok, false);
+
+  // weak signal: only brand titles — one brand asked for, five returned
+  const titled = (titles) => titles.map((brand_title, id) => ({ id, brand_title }));
+  assert.equal(filtersLookHonoured(query, titled(['Raf Simons', 'Nike', 'Zara', 'H&M'])).ok, false);
+  assert.equal(filtersLookHonoured(query, titled(['Raf Simons', 'Raf Simons', 'Raf Simons'])), null,
+    'a single brand in the answer is not evidence either way');
+
+  // not enough to judge
+  assert.equal(filtersLookHonoured(query, withIds([9])), null, 'too few items to judge');
+  assert.equal(filtersLookHonoured({ search_text: 'raf' }, withIds([9, 9, 9])), null,
+    'without a brand filter there is nothing to verify');
 });
 
 /* ------------------------------ normalizing ----------------------------- */

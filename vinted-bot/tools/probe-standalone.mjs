@@ -110,10 +110,10 @@ const ATTR = { catalog_ids: 'catalog', brand_ids: 'brand', size_ids: 'size', sta
 const asAttributes = (q) =>
   Object.fromEntries(Object.entries(q).map(([k, v]) => [ATTR[k] ? `attribute_ids[${ATTR[k]}]` : k, v]));
 
-const build = (base, q) => {
+const build = (base, q, perPage = 5) => {
   const sp = new URLSearchParams(q);
   sp.set('page', '1');
-  sp.set('per_page', '5');
+  sp.set('per_page', String(perPage));
   sp.set('order', 'newest_first');
   return `${base}?${sp.toString()}`;
 };
@@ -209,7 +209,60 @@ for (const [name, url] of VARIANTS) {
   }
 }
 
-// 3. inline-JSON fallback
+// 3. do the filters actually filter?
+say('');
+say('--- filter efficacy (200 OK is not proof) ---');
+{
+  const idKeys = Object.keys(query).filter((k) => k in ATTR);
+  if (!idKeys.length) {
+    say('в ссылке нет *_ids фильтров — проверка пропущена.');
+    say('перезапусти с URL, где выбран бренд, иначе игнор фильтров не проявится.');
+  } else {
+    const HOST = `https://api.${bare}/svc-catalogue/items`;
+    const withoutIds = Object.fromEntries(Object.entries(query).filter(([k]) => !(k in ATTR)));
+    // the fullest header set, so a failure here is about filters, not headers
+    const headers = headerSets().at(-1)[1];
+    const runs = [
+      ['baseline (фильтры убраны)', build(HOST, withoutIds, 20)],
+      ['plain   *_ids', build(HOST, query, 20)],
+      ['attribute_ids ', build(HOST, asAttributes(query), 20)],
+    ];
+    const seen = {};
+    for (const [label, url] of runs) {
+      try {
+        const r = await get(url, headers, 0);
+        let items = null;
+        try {
+          items = extractItems(JSON.parse(r.body));
+        } catch {}
+        if (!items) {
+          say(`${label}: HTTP ${r.status}, объявлений нет`);
+          continue;
+        }
+        const brands = new Set(
+          items.map((i) => i.brand_title || i.brand?.title || i.item_box?.first_line).filter(Boolean),
+        );
+        seen[label] = { ids: new Set(items.map((i) => i.id)), brands };
+        say(`${label}: items=${String(items.length).padStart(2)} разных брендов=${brands.size} → ${[...brands].slice(0, 4).join(', ')}`);
+      } catch (e) {
+        say(`${label}: ERROR ${e.message}`);
+      }
+      await new Promise((r) => setTimeout(r, 900));
+    }
+    const base = seen['baseline (фильтры убраны)'];
+    for (const label of ['plain   *_ids', 'attribute_ids ']) {
+      const run = seen[label];
+      if (!base || !run) continue;
+      const overlap = [...run.ids].filter((id) => base.ids.has(id)).length;
+      const identical = overlap === run.ids.size && run.ids.size === base.ids.size;
+      say(
+        `ВЕРДИКТ ${label}: ${identical ? 'ФИЛЬТР ПРОИГНОРИРОВАН (выдача совпала с baseline)' : `сужает (совпадений с baseline ${overlap}/${run.ids.size}, брендов ${run.brands.size} против ${base.brands.size})`}`,
+      );
+    }
+  }
+}
+
+// 4. inline-JSON fallback
 say('');
 say('--- inline JSON on the catalog page ---');
 try {
