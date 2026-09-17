@@ -2,3 +2,7 @@ node_modules/
 data/
 .env
 *.log
+
+# patch bundles are a transport format, not source — they go stale
+# the moment the commits they carry land in the branch
+*.patch
