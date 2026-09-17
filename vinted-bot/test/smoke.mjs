@@ -116,6 +116,24 @@ test('a search with id filters leads with the attribute shape and full headers',
   assert.equal(orderedStrategies({ price_to: '300' })[0].name, 'svc-catalogue');
 });
 
+test('the plain shape is never offered to a filtered query', () => {
+  // measured: plain brand_ids is accepted and ignored, so falling back to it
+  // would post the wrong brand — no listings beats wrong listings
+  for (const q of [{ brand_ids: '344976' }, { catalog_ids: '2050', price_to: '300' }]) {
+    const names = orderedStrategies(q).map((s) => s.name);
+    assert.ok(names.length > 0, 'a filtered query still needs somewhere to go');
+    assert.ok(names.every((n) => n.endsWith('-attrs')), `plain shape leaked into ${names.join(',')}`);
+    assert.ok(names.includes('svc-catalogue-attrs'));
+    for (const pair of candidatesFor('www.vinted.de', q)) {
+      assert.equal(pair.strategy.shape, 'attrs');
+    }
+  }
+  // and the attribute URL really carries the bracket names
+  const url = strategyByName('svc-catalogue-attrs').url('www.vinted.de', { brand_ids: '344976' });
+  assert.equal(new URL(url).searchParams.get('attribute_ids[brand]'), '344976');
+  assert.equal(new URL(url).searchParams.get('brand_ids'), null);
+});
+
 test('a response that ignored the brand filter is rejected, not cached', () => {
   const query = { brand_ids: '5' };
   const withIds = (ids) => ids.map((brand_id, n) => ({ id: n, brand_id }));

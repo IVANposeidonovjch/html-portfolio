@@ -42,7 +42,15 @@ function makeAgent(proxyUrl) {
         headers: { host: `${opts.host}:${opts.port || 443}`, ...(auth ? { 'proxy-authorization': auth } : {}) },
       });
       req.once('connect', (res, socket) => {
-        if (res.statusCode !== 200) return cb(new Error(`proxy CONNECT -> ${res.statusCode}`));
+        if (res.statusCode !== 200) {
+          // without this the rejected socket later emits ECONNRESET with nobody
+          // listening, and an unhandled 'error' event kills the whole probe
+          socket.destroy();
+          return cb(new Error(`proxy CONNECT -> ${res.statusCode}`));
+        }
+        // errors on the raw socket resurface on the TLS socket, which the
+        // request does listen to; swallow them here so they are never unhandled
+        socket.on('error', () => {});
         cb(null, tls.connect({ socket, servername: opts.host }));
       });
       req.once('error', cb);
@@ -119,8 +127,9 @@ const build = (base, q, perPage = 5) => {
 };
 
 const VARIANTS = [
-  ['svc-catalogue', build(`https://api.${bare}/svc-catalogue/items`, query)],
   ['svc-catalogue-attrs', build(`https://api.${bare}/svc-catalogue/items`, asAttributes(query))],
+  ['svc-catalogue-www-attrs', build(`https://api.www.${bare}/svc-catalogue/items`, asAttributes(query))],
+  ['svc-catalogue', build(`https://api.${bare}/svc-catalogue/items`, query)],
   ['svc-catalogue-www', build(`https://api.www.${bare}/svc-catalogue/items`, query)],
   ['svc-catalog-singular', build(`https://api.${bare}/svc-catalog/items`, query)],
   ['api-host-v2', build(`https://api.${bare}/api/v2/catalog/items`, query)],
@@ -222,6 +231,7 @@ say('--- filter efficacy (200 OK is not proof) ---');
     const withoutIds = Object.fromEntries(Object.entries(query).filter(([k]) => !(k in ATTR)));
     // the fullest header set, so a failure here is about filters, not headers
     const headers = headerSets().at(-1)[1];
+    const wantedBrands = String(query.brand_ids || '').split(',').filter(Boolean);
     const runs = [
       ['baseline (фильтры убраны)', build(HOST, withoutIds, 20)],
       ['plain   *_ids', build(HOST, query, 20)],
@@ -242,8 +252,16 @@ say('--- filter efficacy (200 OK is not proof) ---');
         const brands = new Set(
           items.map((i) => i.brand_title || i.brand?.title || i.item_box?.first_line).filter(Boolean),
         );
+        // the sharpest check available: does the item's own brand id match what we asked for?
+        const brandIds = items.map((i) => i.brand_id ?? i.brand?.id).filter((v) => v != null);
+        const matching = wantedBrands.length
+          ? brandIds.filter((id) => wantedBrands.includes(String(id))).length
+          : null;
         seen[label] = { ids: new Set(items.map((i) => i.id)), brands };
-        say(`${label}: items=${String(items.length).padStart(2)} разных брендов=${brands.size} → ${[...brands].slice(0, 4).join(', ')}`);
+        say(
+          `${label}: items=${String(items.length).padStart(2)} разных брендов=${brands.size} → ${[...brands].slice(0, 4).join(', ')}` +
+            (matching === null || !brandIds.length ? '' : `  | brand_id совпал у ${matching}/${brandIds.length}`),
+        );
       } catch (e) {
         say(`${label}: ERROR ${e.message}`);
       }
@@ -255,9 +273,14 @@ say('--- filter efficacy (200 OK is not proof) ---');
       if (!base || !run) continue;
       const overlap = [...run.ids].filter((id) => base.ids.has(id)).length;
       const identical = overlap === run.ids.size && run.ids.size === base.ids.size;
-      say(
-        `ВЕРДИКТ ${label}: ${identical ? 'ФИЛЬТР ПРОИГНОРИРОВАН (выдача совпала с baseline)' : `сужает (совпадений с baseline ${overlap}/${run.ids.size}, брендов ${run.brands.size} против ${base.brands.size})`}`,
-      );
+      // one brand requested but many in the answer is the same failure by another name
+      const tooManyBrands = wantedBrands.length > 0 && run.brands.size > wantedBrands.length;
+      const verdict = identical
+        ? 'ФИЛЬТР ПРОИГНОРИРОВАН (выдача совпала с baseline)'
+        : tooManyBrands
+          ? `ФИЛЬТР ПРОИГНОРИРОВАН (запрошено брендов ${wantedBrands.length}, в ответе ${run.brands.size}: ${[...run.brands].slice(0, 4).join(', ')})`
+          : `сужает (совпадений с baseline ${overlap}/${run.ids.size}, брендов ${run.brands.size} против ${base.brands.size})`;
+      say(`ВЕРДИКТ ${label}: ${verdict}`);
     }
   }
 }

@@ -19,16 +19,19 @@
  * tries that one first and the other as a fallback, because sending headers a
  * confirmed-working call did not send is its own way to get rejected.
  *
- * FILTER SHAPE (17.09.2026). The probe confirmed a `search_text` query with
- * plain parameter names — but that query carried no *_ids filter at all, so it
- * proves nothing about them. An independent implementation
- * (JakobAIOdev/Vintrack-Vinted-Monitor@3fd1ff2) folds every id filter into
- * `attribute_ids[...]`. The failure mode in between is the dangerous one: the
- * service answers 200 with listings while silently ignoring `brand_ids`, and a
- * monitor built on that floods its topics with the wrong brand. So a query that
- * carries id filters tries the attribute shape FIRST, and `filtersLookHonoured`
- * below rejects a response whose brands contradict the filter — a variant only
- * gets cached once it has proven it actually narrows results.
+ * FILTER SHAPE — measured, not inferred (17.09.2026, .de, residential IP):
+ *   `...?brand_ids=344976`            -> 200, and an adidas listing comes back.
+ *                                        The filter is accepted and ignored.
+ *   `...?attribute_ids[brand]=344976` -> 200 with listings.
+ * So plain names work for `search_text` only, and every id filter has to travel
+ * as `attribute_ids[...]` — the same shape an independent implementation ships
+ * (JakobAIOdev/Vintrack-Vinted-Monitor@3fd1ff2).
+ *
+ * Silently-dropped filters are the worst failure this bot can have: 200 OK,
+ * listings flowing, wrong brand in the topic. Two defences, both here:
+ * orderedStrategies() never offers the plain shape to a filtered query, and
+ * filtersLookHonoured() rejects any answer whose brands contradict the filter,
+ * so a variant is cached only after it has proven it narrows results.
  */
 
 const bare = (domain) => domain.replace(/^www\./, '');
@@ -78,27 +81,44 @@ export function extractItems(body) {
   return null;
 }
 
+/**
+ * Every variant is a (host, filter shape) pair. `shape` matters most: a query
+ * with id filters must never be sent in the plain shape, because that shape is
+ * MEASURED to drop them silently — a search pinned to brand 344976 came back
+ * with an adidas listing (17.09.2026, .de, residential IP).
+ */
 export const STRATEGIES = [
   {
     name: 'svc-catalogue-attrs',
-    note: 'attribute_ids[...] filters, per the Vintrack fix',
+    shape: 'attrs',
+    note: 'api host, attribute_ids[...] — returns items for a brand-filtered search',
     headers: 'full',
     url: build((d) => `https://api.${bare(d)}/svc-catalogue/items`, attributeIds),
   },
   {
+    name: 'svc-catalogue-www-attrs',
+    shape: 'attrs',
+    note: 'api.www host, attribute_ids[...]',
+    headers: 'full',
+    url: build((d) => `https://api.www.${bare(d)}/svc-catalogue/items`, attributeIds),
+  },
+  {
     name: 'svc-catalogue',
-    note: 'plain filter names, confirmed 17.09.2026 for search_text on .de',
+    shape: 'plain',
+    note: 'api host, plain names — confirmed for search_text, drops *_ids filters',
     headers: 'plain',
     url: build((d) => `https://api.${bare(d)}/svc-catalogue/items`, passthrough),
   },
   {
     name: 'svc-catalogue-www',
-    note: 'api.www.<domain> host variant reported for .com',
+    shape: 'plain',
+    note: 'api.www host, plain names',
     headers: 'plain',
     url: build((d) => `https://api.www.${bare(d)}/svc-catalogue/items`, passthrough),
   },
   {
     name: 'legacy-catalog',
+    shape: 'plain',
     note: 'pre-September-2026 endpoint, 404 since the move',
     headers: 'full',
     url: build((d) => `https://${d}/api/v2/catalog/items`, passthrough),
@@ -108,15 +128,21 @@ export const STRATEGIES = [
 export const strategyByName = (name) => STRATEGIES.find((s) => s.name === name);
 
 /**
- * Order to try variants in. A text-only search is known to work with plain
- * names, so it keeps that order; anything carrying id filters leads with the
- * attribute shape, which is the one an independent implementation ships.
+ * Which variants may serve this query, best first.
+ *
+ * A query carrying id filters gets the attribute-shaped variants ONLY. The
+ * plain shape would answer 200 with listings of other brands, and a monitor
+ * that posts the wrong brand into a topic is worse than one that reports it
+ * cannot reach Vinted — so the plain shape is not a fallback here, it is a
+ * wrong answer. If every attribute variant fails, fetchCatalog says so and
+ * points at the probe.
+ *
+ * A text-only query has no id filters to drop, so both shapes are equivalent
+ * and the order follows what was measured: plain names first.
  */
 export function orderedStrategies(query) {
-  if (!hasIdFilters(query)) {
-    return [...STRATEGIES].sort((a, b) => (a.name === 'svc-catalogue' ? -1 : b.name === 'svc-catalogue' ? 1 : 0));
-  }
-  return [...STRATEGIES];
+  if (hasIdFilters(query)) return STRATEGIES.filter((s) => s.shape === 'attrs');
+  return [...STRATEGIES].sort((a, b) => (a.shape === b.shape ? 0 : a.shape === 'plain' ? -1 : 1));
 }
 
 /**
