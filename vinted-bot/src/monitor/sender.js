@@ -46,11 +46,11 @@ export class Sender {
   }
 
   async #send(job, attempt = 0) {
-    const { chatId, threadId, item, searchName } = job;
-    const caption = renderItem(item, searchName);
+    const { chatId, threadId, item, searchName, lang } = job;
+    const caption = renderItem(item, searchName, lang);
     const opts = {
       parse_mode: 'HTML',
-      reply_markup: itemKeyboard(item),
+      reply_markup: itemKeyboard(item, lang),
       ...(threadId ? { message_thread_id: threadId } : {}),
     };
     try {

@@ -23,19 +23,28 @@ const DROP = new Set(['order', 'page', 'per_page', 'time', 'disabled_personaliza
 // Vinted uses "catalog[]" on the page but "catalog_ids" in the API
 const RENAME = { catalog: 'catalog_ids', catalog_id: 'catalog_ids', brand: 'brand_ids', size: 'size_ids' };
 
-export class InvalidVintedUrl extends Error {}
+/**
+ * Carries a `code` rather than a sentence: the wording lives in the locale
+ * files, so the same rejection reads in the user's own language.
+ */
+export class InvalidVintedUrl extends Error {
+  constructor(code) {
+    super(code);
+    this.code = code;
+  }
+}
 
 export function parseSearchUrl(raw) {
   let u;
   try {
     u = new URL(raw.trim());
   } catch {
-    throw new InvalidVintedUrl('Это не похоже на ссылку.');
+    throw new InvalidVintedUrl('notLink');
   }
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new InvalidVintedUrl('Нужна http(s) ссылка.');
-  if (!HOST_RE.test(u.hostname)) throw new InvalidVintedUrl('Это не ссылка на Vinted.');
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new InvalidVintedUrl('scheme');
+  if (!HOST_RE.test(u.hostname)) throw new InvalidVintedUrl('notVinted');
   if (/\/items\/\d+/.test(u.pathname)) {
-    throw new InvalidVintedUrl('Это ссылка на конкретный товар, а нужна ссылка на поиск (страница каталога).');
+    throw new InvalidVintedUrl('itemPage');
   }
 
   const domain = u.hostname.startsWith('www.') ? u.hostname : `www.${u.hostname}`;
@@ -54,7 +63,7 @@ export function parseSearchUrl(raw) {
 
   // A bare /catalog with no filters would fire the whole marketplace at the user.
   if (params.size === 0) {
-    throw new InvalidVintedUrl('В ссылке нет ни одного фильтра — задай на Vinted бренд/категорию/цену и скопируй URL заново.');
+    throw new InvalidVintedUrl('noFilters');
   }
 
   const query = {};

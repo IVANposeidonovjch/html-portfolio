@@ -15,7 +15,8 @@ fs.rmSync('./data/test.sqlite-shm', { force: true });
 const { parseSearchUrl, InvalidVintedUrl } = await import('../src/vinted/url.js');
 const store = await import('../src/db/index.js');
 const { Monitor } = await import('../src/monitor/scheduler.js');
-const { renderItem } = await import('../src/bot/format.js');
+const { renderItem, itemKeyboard } = await import('../src/bot/format.js');
+const { LOCALES, allLabels, resolveLang, t } = await import('../src/i18n/index.js');
 const { STRATEGIES, extractItems, strategyByName, orderedStrategies, filtersLookHonoured } =
   await import('../src/vinted/endpoints.js');
 const { candidatesFor, endpointCache } = await import('../src/vinted/client.js');
@@ -225,10 +226,59 @@ const rawItem = (id) => ({
 test('normalizes object prices and renders a caption', () => {
   const item = normalizeItem(rawItem(1), 'www.vinted.de');
   assert.equal(item.price.amount, 120);
-  const text = renderItem(item, 'Raf');
+  const text = renderItem(item, 'Raf', 'ru');
   assert.match(text, /120 EUR/);
   assert.match(text, /с защитой 133.50 EUR/);
   assert.match(text, /Raf Simons/);
+  // the same listing, another language
+  assert.match(renderItem(item, 'Raf', 'de'), /133.50 EUR mit Käuferschutz/);
+  assert.equal(itemKeyboard(item, 'de').inline_keyboard[0][0].text, 'URL');
+});
+
+/* --------------------------------- i18n --------------------------------- */
+
+test('every locale carries exactly the same keys', () => {
+  const reference = Object.keys(LOCALES.en).sort();
+  for (const [code, dict] of Object.entries(LOCALES)) {
+    assert.deepEqual(Object.keys(dict).sort(), reference, `locale ${code} drifted`);
+    for (const [key, value] of Object.entries(dict)) {
+      assert.equal(typeof value, 'string', `${code}.${key} is not a string`);
+      assert.ok(value.length > 0, `${code}.${key} is empty`);
+    }
+  }
+});
+
+test('placeholders are the same in every translation of a key', () => {
+  const holders = (s) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+  for (const key of Object.keys(LOCALES.en)) {
+    const expected = holders(LOCALES.en[key]);
+    for (const [code, dict] of Object.entries(LOCALES)) {
+      assert.deepEqual(holders(dict[key]), expected, `${code}.${key} has different placeholders`);
+    }
+  }
+});
+
+test('t() interpolates, falls back to English and never prints a raw key', () => {
+  assert.match(t('ru', 'add.created', { name: 'Raf', seconds: 60 }), /«Raf»/);
+  assert.match(t('uk', 'plan.limit', { limit: 25 }), /25/);
+  assert.equal(t('fr', 'item.button'), 'URL', 'an unknown language falls back to English');
+  assert.equal(t('en', 'no.such.key'), 'no.such.key');
+  // an unsupplied placeholder stays visible instead of rendering "undefined"
+  assert.match(t('en', 'plan.limit', {}), /\{limit\}/);
+});
+
+test('menu buttons are matched in every language', () => {
+  const labels = allLabels('btn.add');
+  assert.equal(labels.length, Object.keys(LOCALES).length);
+  assert.ok(labels.includes(LOCALES.de['btn.add']));
+  assert.ok(labels.includes(LOCALES.ru['btn.add']));
+});
+
+test('the interface language is seeded from the Telegram locale', () => {
+  assert.equal(resolveLang('de-DE'), 'de');
+  assert.equal(resolveLang('uk'), 'uk');
+  assert.equal(resolveLang('pt-BR'), 'en');
+  assert.equal(resolveLang(undefined), 'en');
 });
 
 test('reads the svc-catalogue item shape (item_box, no flat brand/size)', () => {
@@ -358,6 +408,41 @@ test('plan expiry falls back to free', () => {
   assert.equal(store.effectivePlan(store.getUser(1)), 'free');
   store.setPlan.run('pro', store.now() + 86400, 1);
   assert.equal(store.effectivePlan(store.getUser(1)), 'pro');
+});
+
+/* ------------------------ supergroup migration -------------------------- */
+
+test('a group upgraded to a supergroup takes its searches with it', () => {
+  const OLD = -900100;
+  const NEW = -1009001000100;
+  store.upsertChat.run({
+    owner_id: 1, tg_chat_id: OLD, title: 'Vinted Monitor', type: 'group',
+    is_forum: 0, created_at: store.now(),
+  });
+  const mk = (name) =>
+    store.insertSearch.run({
+      user_id: 1, name, url: parsed.normalizedUrl, domain: parsed.domain,
+      canonical_key: parsed.canonicalKey, api_query: JSON.stringify(parsed.query),
+      dest_chat_id: OLD, dest_thread_id: null, next_run_at: 0, created_at: store.now(),
+    }).lastInsertRowid;
+  const ids = [mk('Raf group'), mk('Helmut group')];
+
+  const owners = store.chatOwners.all(OLD);
+  assert.deepEqual(owners.map((o) => o.owner_id), [1], 'the owner must be found before the move');
+
+  const moved = store.migrateChat(OLD, NEW);
+  assert.equal(moved, 2, 'both searches move');
+  for (const id of ids) assert.equal(store.getSearch.get(id).dest_chat_id, NEW);
+  assert.equal(store.getChatByTgId.get(1, NEW).title, 'Vinted Monitor');
+  assert.equal(store.getChatByTgId.get(1, OLD), undefined, 'the old chat row is gone');
+  assert.equal(store.chatOwners.all(OLD).length, 0);
+
+  // second delivery of the same service message must not break anything
+  assert.equal(store.migrateChat(OLD, NEW), 0, 'migrating twice is a no-op');
+  for (const id of ids) {
+    assert.equal(store.getSearch.get(id).dest_chat_id, NEW);
+    store.deleteSearch.run(id, 1);
+  }
 });
 
 console.log(failures ? `\n${failures} test(s) failed` : '\nall tests passed');

@@ -10,20 +10,29 @@ fs.mkdirSync(path.dirname(path.resolve(config.dbPath)), { recursive: true });
 export const db = new Database(path.resolve(config.dbPath));
 db.exec(fs.readFileSync(path.join(here, 'schema.sql'), 'utf8'));
 
+// Migrations for databases created before a column existed. SQLite has no
+// "ADD COLUMN IF NOT EXISTS", so ask the table what it already has.
+for (const [table, column, ddl] of [['users', 'lang', "TEXT NOT NULL DEFAULT 'en'"]]) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+}
+
 export const now = () => Math.floor(Date.now() / 1000);
 
 /* ------------------------------- users -------------------------------- */
 
 const insertUser = db.prepare(
-  `INSERT INTO users (tg_id, username, created_at) VALUES (?, ?, ?)
+  `INSERT INTO users (tg_id, username, lang, created_at) VALUES (?, ?, ?, ?)
    ON CONFLICT(tg_id) DO UPDATE SET username = excluded.username`,
 );
 const selectUser = db.prepare('SELECT * FROM users WHERE tg_id = ?');
 
-export function upsertUser(tgId, username) {
-  insertUser.run(tgId, username || null, now());
+export function upsertUser(tgId, username, lang = 'en') {
+  insertUser.run(tgId, username || null, lang, now());
   return selectUser.get(tgId);
 }
+
+export const setLang = db.prepare('UPDATE users SET lang = ? WHERE tg_id = ?');
 export const getUser = (tgId) => selectUser.get(tgId);
 
 export function effectivePlan(user) {
@@ -50,6 +59,19 @@ export const listChats = db.prepare(
 export const getChat = db.prepare('SELECT * FROM chats WHERE id = ? AND owner_id = ?');
 export const getChatByTgId = db.prepare('SELECT * FROM chats WHERE owner_id = ? AND tg_chat_id = ?');
 export const deleteChat = db.prepare('DELETE FROM chats WHERE id = ? AND owner_id = ?');
+export const chatOwners = db.prepare('SELECT owner_id, title FROM chats WHERE tg_chat_id = ?');
+
+/**
+ * A group that turns into a supergroup gets a brand new chat id, and every send
+ * to the old one fails forever. Move the chat and everything pointing at it in
+ * one transaction.
+ */
+export const migrateChat = db.transaction((oldId, newId) => {
+  db.prepare('UPDATE OR IGNORE chats SET tg_chat_id = ? WHERE tg_chat_id = ?').run(newId, oldId);
+  const moved = db.prepare('UPDATE searches SET dest_chat_id = ? WHERE dest_chat_id = ?').run(newId, oldId);
+  db.prepare('DELETE FROM chats WHERE tg_chat_id = ?').run(oldId);
+  return moved.changes;
+});
 
 export const upsertTopic = db.prepare(
   `INSERT INTO topics (chat_id, thread_id, name, created_at) VALUES (?, ?, ?, ?)

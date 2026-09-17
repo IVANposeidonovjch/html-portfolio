@@ -126,6 +126,7 @@ export class Monitor {
         item,
         searchName: search.name,
         searchId: search.id,
+        lang: user?.lang || 'en',
       });
       queued++;
     }

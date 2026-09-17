@@ -5,6 +5,7 @@ import { Sender } from './monitor/sender.js';
 import { Monitor } from './monitor/scheduler.js';
 import { poolStatus } from './vinted/client.js';
 import { logger } from './util/logger.js';
+import { t } from './i18n/index.js';
 
 if (!config.botToken) {
   console.error('BOT_TOKEN is missing — copy .env.example to .env and fill it in.');
@@ -15,18 +16,32 @@ const bot = createBot();
 const sender = new Sender(bot.api);
 const monitor = new Monitor(sender);
 
-// A dead destination (bot kicked, group deleted, topic closed) pauses its searches
-// instead of retrying forever.
 sender.onFailure = (job, err) => {
+  // A group that became a supergroup while the bot was away: Telegram puts the
+  // new chat id in the error itself, so move the searches and deliver the
+  // listing that just failed, instead of disabling anything.
+  const newChatId = err.parameters?.migrate_to_chat_id;
+  if (newChatId && !job.migrated) {
+    const owners = store.chatOwners.all(job.chatId);
+    const moved = store.migrateChat(job.chatId, newChatId);
+    logger.info(`chat migrated on send ${job.chatId} -> ${newChatId}, ${moved} search(es) moved`);
+    for (const { owner_id, title } of owners) {
+      const lang = store.getUser(owner_id)?.lang || 'en';
+      bot.api.sendMessage(owner_id, t(lang, 'migrate.done', { title, count: moved })).catch(() => {});
+    }
+    sender.enqueue({ ...job, chatId: newChatId, migrated: true });
+    return;
+  }
+
+  // A destination that is simply gone (kicked, deleted, topic closed) pauses its
+  // searches instead of retrying forever.
   if (!/chat not found|bot was kicked|bot is not a member|not enough rights|message thread not found|CHAT_WRITE_FORBIDDEN/i.test(err.description)) return;
   const search = store.getSearch.get(job.searchId);
   if (!search) return;
   store.toggleSearch.run(0, search.id, search.user_id);
+  const lang = store.getUser(search.user_id)?.lang || 'en';
   bot.api
-    .sendMessage(
-      search.user_id,
-      `⚠️ Поиск «${search.name}» выключен: не могу писать в целевой чат (${err.description}).`,
-    )
+    .sendMessage(search.user_id, t(lang, 'send.searchDisabled', { name: search.name, error: err.description }))
     .catch(() => {});
 };
 

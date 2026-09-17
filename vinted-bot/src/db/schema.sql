@@ -4,6 +4,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS users (
   tg_id              INTEGER PRIMARY KEY,
   username           TEXT,
+  lang               TEXT    NOT NULL DEFAULT 'en',
   plan               TEXT    NOT NULL DEFAULT 'free',   -- free | basic | pro
   plan_until         INTEGER,                            -- unix seconds, NULL = unlimited (free)
   monitoring_enabled INTEGER NOT NULL DEFAULT 1,
