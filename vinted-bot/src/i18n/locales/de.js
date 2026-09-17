@@ -7,23 +7,35 @@ export const de = {
   'btn.help': '❓ Hilfe',
   'btn.lang': '🌐 Sprache',
 
-  'help.text': `<b>Vinted Monitor</b> — neue Vinted-Anzeigen direkt in Telegram.
+  'start.text': `⚡️ <b>Vinted Monitor</b>
 
-<b>So geht's</b>
-1. Suche auf Vinted einstellen: Marke, Kategorie, Größe, Preis.
+Du stellst die Suche auf Vinted ein — ich behalte sie im Auge und schicke dir jede neue Anzeige Sekunden nach der Veröffentlichung. Während andere die Seite neu laden, schreibst du schon dem Verkäufer.
+
+Ein Link = eine Suche. Beliebig viele, in den Chat oder in Themen einer Gruppe.`,
+
+  'help.text': `⚡️ <b>Vinted Monitor</b> — neue Vinted-Anzeigen in Sekunden.
+
+🔎 <b>Suche hinzufügen</b>
+1. Filter auf Vinted setzen: Marke, Kategorie, Größe, Preis.
 2. URL der Suchseite kopieren.
-3. „➕ Link hinzufügen“ → URL schicken → Namen vergeben (z. B. <i>Raf</i>).
-4. Ziel wählen: hier im Chat, eine Gruppe oder ein Thema in der Gruppe.
+3. „➕ Link hinzufügen“ → URL schicken → benennen (<i>Raf</i>).
+4. Ziel wählen: hier, eine Gruppe oder ein Thema.
 
-<b>Gruppen und Themen</b>
-• Gruppe anlegen → Bot als Admin hinzufügen → dort <code>/bind</code> schreiben.
-• Themen aktivieren — der Bot legt pro Suche selbst eins an.
-• Kanal: Bot als Admin hinzufügen und mir einen Beitrag daraus weiterleiten.
+🔔 <b>So sieht ein Treffer aus</b>
+<i>[Foto des Artikels]</i>
+<b>Raf Simons bomber</b>
+💶 <b>240 EUR</b> <i>(261,20 mit Käuferschutz)</i>
+🏷 Raf Simons   📏 L   ✨ Very good
+[ URL ]
 
-<b>Das Menü</b> hat vier Buttons: hinzufügen, meine Links, Überwachung, Hilfe.
-Tarif, Sprache und deine Chats findest du auf diesem Bildschirm, unten.
+🧵 <b>Gruppen und Themen</b>
+Bot als Admin in die Gruppe holen und dort <code>/bind</code> schreiben. Themen aktivieren — der Bot legt pro Suche selbst eins an: Raf, Helmut, Bags an einem Ort.
 
-<b>Befehle:</b> /start, /add, /help — alles andere per Button.`,
+🛡 <b>Keine Dubletten</b>
+Der erste Durchlauf merkt sich nur den Bestand. Eine Anzeige landet einmal im Thema, auch wenn zehn deiner Links passen.
+
+⚙️ <b>Einstellungen</b> — in den Buttons unten: Tarif, Sprache, deine Chats.
+⌨️ <b>Befehle</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Alles andere per Button.`,
 
   'add.askUrl': `Schick mir eine Vinted-Such-URL.
 

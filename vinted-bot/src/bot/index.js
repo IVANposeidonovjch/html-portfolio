@@ -1,4 +1,4 @@
-import { Bot, GrammyError, InlineKeyboard } from 'grammy';
+import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy';
 import { config, intervalFor, searchLimitFor } from '../config.js';
 import * as store from '../db/index.js';
 import { LANGS, isLang, resolveLang, t } from '../i18n/index.js';
@@ -58,7 +58,14 @@ async function safeEdit(ctx, text, options) {
   try {
     await ctx.editMessageText(text, options);
   } catch (err) {
-    if (err instanceof GrammyError && /message is not modified/i.test(err.description)) return;
+    if (!(err instanceof GrammyError)) throw err;
+    if (/message is not modified/i.test(err.description)) return;
+    // /start can be a photo with the menu in its caption; a photo has no text
+    // to edit, so the same navigation has to rewrite the caption instead.
+    if (/no text in the message to edit/i.test(err.description)) {
+      await ctx.editMessageCaption({ caption: text, ...options });
+      return;
+    }
     throw err;
   }
 }
@@ -107,7 +114,7 @@ export function createBot() {
   /* ---------------------------- private: start --------------------------- */
 
   bot.chatType('private').command('start', async (ctx) => {
-    const { lang } = who(ctx);
+    const { user, lang } = who(ctx);
     store.upsertChat.run({
       owner_id: ctx.from.id,
       tg_chat_id: ctx.chat.id,
@@ -116,7 +123,29 @@ export function createBot() {
       is_forum: 0,
       created_at: store.now(),
     });
-    await showHome(ctx);
+
+    const text = t(lang, 'start.text');
+    const reply_markup = mainMenu(lang, { monitoring: !!user.monitoring_enabled });
+
+    // A picture is optional: configure START_IMAGE and the welcome becomes a
+    // photo with the menu under it, otherwise the same words are sent as text.
+    if (config.startImage) {
+      const photo = /^https?:\/\//.test(config.startImage)
+        ? config.startImage
+        : new InputFile(config.startImage);
+      try {
+        await ctx.replyWithPhoto(photo, { caption: text, parse_mode: 'HTML', reply_markup });
+        return;
+      } catch (err) {
+        // a broken path or an image Telegram refuses must not cost the welcome
+        logger.warn(`start image not sent (${config.startImage}): ${err.description || err.message}`);
+      }
+    }
+    await ctx.reply(text, {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      reply_markup,
+    });
   });
 
   /** The single message that carries the four-button menu. */

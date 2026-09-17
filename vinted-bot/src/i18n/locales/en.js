@@ -7,23 +7,35 @@ export const en = {
   'btn.help': '❓ Help',
   'btn.lang': '🌐 Language',
 
-  'help.text': `<b>Vinted Monitor</b> — new Vinted listings delivered to Telegram.
+  'start.text': `⚡️ <b>Vinted Monitor</b>
 
-<b>How to use</b>
-1. Set up the search on Vinted: brand, category, size, price.
+You set up the search on Vinted — I watch it and push every new listing here seconds after it goes live. While everyone else refreshes the page, you're already messaging the seller.
+
+One link = one search. As many as you like, to your DMs or into group topics.`,
+
+  'help.text': `⚡️ <b>Vinted Monitor</b> — new Vinted listings in seconds.
+
+🔎 <b>Adding a search</b>
+1. Set the filters on Vinted: brand, category, size, price.
 2. Copy the URL of the search page.
-3. "➕ Add link" → send the URL → name it (for example <i>Raf</i>).
-4. Choose where it goes: here, a group, or a topic inside a group.
+3. "➕ Add link" → send the URL → name it (<i>Raf</i>).
+4. Pick where it lands: here, a group, or a topic.
 
-<b>Groups and topics</b>
-• Create a group → add the bot as admin → type <code>/bind</code> there.
-• Turn on Topics and the bot creates a topic per search by itself.
-• Channel: add the bot as admin and forward me any post from it.
+🔔 <b>What an alert looks like</b>
+<i>[item photo]</i>
+<b>Raf Simons bomber</b>
+💶 <b>240 EUR</b> <i>(261.20 with protection)</i>
+🏷 Raf Simons   📏 L   ✨ Very good
+[ URL ]
 
-<b>The menu</b> has four buttons: add, my links, monitoring, help.
-Plan, language and your chats live on this screen, in the buttons below.
+🧵 <b>Groups and topics</b>
+Add the bot to a group as admin and type <code>/bind</code> there. Turn on Topics and it creates one per search by itself: Raf, Helmut, Bags, all in one place.
 
-<b>Commands:</b> /start, /add, /help — everything else is a button.`,
+🛡 <b>No duplicates</b>
+The first pass only records what is already listed. A listing reaches a topic once, even when ten of your links match it.
+
+⚙️ <b>Settings</b> — in the buttons below: plan, language, your chats.
+⌨️ <b>Commands</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Everything else is a button.`,
 
   'add.askUrl': `Send a Vinted search URL.
 

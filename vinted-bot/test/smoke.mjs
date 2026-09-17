@@ -674,16 +674,85 @@ await (async () => {
   const UID = 5150;
   store.upsertUser(UID, 'menuser', 'ru');
 
-  const start = await drive(
-    textUpdate('/start', UID, [{ type: 'bot_command', offset: 0, length: 6 }]),
-    UID,
-  );
+  const startUpdate = () => textUpdate('/start', UID, [{ type: 'bot_command', offset: 0, length: 6 }]);
+  const start = await drive(startUpdate(), UID);
   test('/start sends the menu as inline buttons and no reply keyboard', () => {
     const msg = start.find((c) => c.method === 'sendMessage');
     assert.ok(msg, 'a message must be sent');
     assert.ok(msg.payload.reply_markup.inline_keyboard, 'menu must be inline');
     assert.equal(msg.payload.reply_markup.keyboard, undefined);
     assert.ok(!start.some((c) => c.payload?.reply_markup?.keyboard), 'nothing may pin a keyboard');
+  });
+
+  test('/start leads with the welcome, not with the bare menu title', () => {
+    const msg = start.find((c) => c.method === 'sendMessage');
+    assert.equal(msg.payload.text, LOCALES.ru['start.text']);
+    assert.match(msg.payload.text, /Vinted Monitor/);
+    assert.equal(msg.payload.parse_mode, 'HTML');
+  });
+
+  test('the welcome and help fit what Telegram accepts', () => {
+    for (const [lang, dict] of Object.entries(LOCALES)) {
+      // /start may travel as a photo caption, capped at 1024 characters
+      assert.ok(dict['start.text'].length <= 1024, `${lang}: start.text too long for a caption`);
+      assert.ok(dict['help.text'].length <= 4096, `${lang}: help.text exceeds a message`);
+      // the tags we use must be the ones Telegram's HTML mode knows
+      const tags = [...dict['help.text'].matchAll(/<\/?([a-z]+)/g)].map((m) => m[1]);
+      for (const tag of new Set(tags)) {
+        assert.ok(['b', 'i', 'u', 's', 'code', 'pre', 'a'].includes(tag), `${lang}: <${tag}> is not allowed`);
+      }
+    }
+  });
+
+  test('help reads as sections, not a paragraph dump', () => {
+    for (const [lang, dict] of Object.entries(LOCALES)) {
+      const headers = dict['help.text'].split('\n').filter((l) => /^[^\w\s].*<b>/.test(l));
+      assert.ok(headers.length >= 4, `${lang}: only ${headers.length} emoji section headers`);
+      assert.match(dict['help.text'], /\[ URL \]/, `${lang}: the example alert is missing`);
+    }
+  });
+
+  const { config: liveConfig } = await import('../src/config.js');
+  liveConfig.startImage = 'https://example.com/banner.png';
+  const photoStart = await drive(startUpdate(), UID);
+  liveConfig.startImage = '';
+  test('with START_IMAGE set, the welcome is a photo carrying the menu', () => {
+    const photo = photoStart.find((c) => c.method === 'sendPhoto');
+    assert.ok(photo, 'sendPhoto must be used when an image is configured');
+    assert.equal(photo.payload.photo, 'https://example.com/banner.png');
+    assert.equal(photo.payload.caption, LOCALES.ru['start.text']);
+    assert.ok(photo.payload.reply_markup.inline_keyboard, 'the menu rides along under the picture');
+    assert.ok(!photoStart.some((c) => c.method === 'sendMessage'), 'and no duplicate text message');
+  });
+
+  test('without START_IMAGE nothing tries to send a picture', () => {
+    assert.ok(!start.some((c) => c.method === 'sendPhoto'));
+  });
+
+  // Navigating away from a photo welcome: a photo has no text to edit, and
+  // Telegram says so — the menu has to rewrite the caption instead.
+  const onPhoto = await (async () => {
+    const bot = createBot();
+    const calls = [];
+    bot.api.config.use(async (prev, method, payload) => {
+      calls.push({ method, payload });
+      if (method === 'editMessageText') {
+        return { ok: false, error_code: 400, description: 'Bad Request: there is no text in the message to edit' };
+      }
+      return { ok: true, result: { message_id: 10, date: 0, chat: { id: UID, type: 'private' } } };
+    });
+    bot.botInfo = { id: 111, is_bot: true, first_name: 'T', username: 'testbot', can_join_groups: true,
+      can_read_all_group_messages: false, supports_inline_queries: false, can_connect_to_business: false,
+      has_main_web_app: false };
+    await bot.handleUpdate(pressUpdate('m:home', UID));
+    return calls;
+  })();
+
+  test('the menu survives being attached to a photo', () => {
+    assert.ok(onPhoto.some((c) => c.method === 'editMessageText'), 'it tries text first');
+    const caption = onPhoto.find((c) => c.method === 'editMessageCaption');
+    assert.ok(caption, 'and falls back to the caption rather than throwing');
+    assert.ok(caption.payload.reply_markup.inline_keyboard, 'the buttons come along');
   });
 
   const pressed = await drive(pressUpdate('m:toggle', UID), UID);
