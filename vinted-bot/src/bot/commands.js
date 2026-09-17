@@ -14,7 +14,13 @@ import { logger } from '../util/logger.js';
  *    is told they exist.
  */
 
-const PRIVATE = ['add', 'list', 'chats', 'pause', 'resume', 'plan', 'lang', 'help'];
+/**
+ * Only what is worth typing. Everything else is a button: a slash list of eight
+ * entries with no arguments is a menu in the wrong place, and it competes with
+ * the inline one. The handlers for the retired commands stay registered, so a
+ * user who learned them keeps working — they are simply not advertised.
+ */
+const PRIVATE = ['start', 'add', 'help'];
 const GROUP = ['bind', 'unbind'];
 const ADMIN = ['users', 'userinfo', 'stats', 'grant'];
 

@@ -10,9 +10,7 @@ import { LANGS, t } from '../i18n/index.js';
 export const mainMenu = (lang, { monitoring = true } = {}) =>
   new InlineKeyboard()
     .text(t(lang, 'btn.add'), 'm:add').text(t(lang, 'btn.list'), 'm:list').row()
-    .text(t(lang, 'btn.chats'), 'm:chats').row()
-    .text(t(lang, monitoring ? 'btn.toggleOn' : 'btn.toggleOff'), 'm:toggle').row()
-    .text(t(lang, 'btn.plan'), 'm:plan').text(t(lang, 'btn.lang'), 'm:lang').row()
+    .text(t(lang, monitoring ? 'btn.toggleOn' : 'btn.toggleOff'), 'm:toggle')
     .text(t(lang, 'btn.help'), 'm:help');
 
 /** Every screen that replaces the menu needs a way back to it. */
@@ -82,6 +80,19 @@ export const langKb = (current) => {
   }
   return backRow(kb, current);
 };
+
+/**
+ * The second level. Plan, language and chats are set once and then forgotten,
+ * so they sit behind Help instead of competing with the four things a user
+ * actually does every day.
+ */
+export const helpKb = (lang) =>
+  backRow(
+    new InlineKeyboard()
+      .text(t(lang, 'btn.plan'), 'm:plan').text(t(lang, 'btn.lang'), 'm:lang').row()
+      .text(t(lang, 'btn.chats'), 'm:chats').row(),
+    lang,
+  );
 
 /** Plan screen and other read-only views: just a way home. */
 export const menuOnlyKb = (lang) => backRow(new InlineKeyboard(), lang);

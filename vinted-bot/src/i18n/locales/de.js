@@ -17,11 +17,13 @@ export const de = {
 
 <b>Gruppen und Themen</b>
 • Gruppe anlegen → Bot als Admin hinzufügen → dort <code>/bind</code> schreiben.
-• Themen in der Gruppe aktivieren — der Bot legt pro Suche selbst ein Thema an, ganz ohne Handarbeit.
+• Themen aktivieren — der Bot legt pro Suche selbst eins an.
 • Kanal: Bot als Admin hinzufügen und mir einen Beitrag daraus weiterleiten.
 
-<b>Befehle</b>
-/add /list /chats /bind /pause /resume /plan /lang`,
+<b>Das Menü</b> hat vier Buttons: hinzufügen, meine Links, Überwachung, Hilfe.
+Tarif, Sprache und deine Chats findest du auf diesem Bildschirm, unten.
+
+<b>Befehle:</b> /start, /add, /help — alles andere per Button.`,
 
   'add.askUrl': `Schick mir eine Vinted-Such-URL.
 
@@ -125,6 +127,7 @@ Beispiel:
     'ℹ️ Gruppe „{title}“ ist jetzt eine Supergruppe — {count} Suche(n) auf den neuen Chat umgezogen, du musst nichts tun.',
 
   // Telegram command menu (setMyCommands)
+  'cmd.start': 'Bot starten',
   'cmd.add': 'Link hinzufügen',
   'cmd.list': 'Meine Links',
   'cmd.chats': 'Meine Chats und Themen',

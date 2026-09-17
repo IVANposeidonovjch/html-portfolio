@@ -449,7 +449,7 @@ test('a group upgraded to a supergroup takes its searches with it', () => {
 
 /* ---------------------------- inline menu ------------------------------- */
 
-const { mainMenu, menuOnlyKb } = await import('../src/bot/keyboards.js');
+const { mainMenu, menuOnlyKb, helpKb } = await import('../src/bot/keyboards.js');
 
 test('the menu is an inline keyboard, not a keyboard pinned to the chat', () => {
   const kb = mainMenu('ru', { monitoring: true });
@@ -458,9 +458,21 @@ test('the menu is an inline keyboard, not a keyboard pinned to the chat', () => 
   const buttons = kb.inline_keyboard.flat();
   assert.deepEqual(
     buttons.map((b) => b.callback_data),
-    ['m:add', 'm:list', 'm:chats', 'm:toggle', 'm:plan', 'm:lang', 'm:help'],
+    ['m:add', 'm:list', 'm:toggle', 'm:help'],
+    'the front menu is four actions',
   );
+  assert.equal(kb.inline_keyboard.length, 2, 'two rows of two — no scrolling');
+  assert.ok(kb.inline_keyboard.every((row) => row.length === 2));
   assert.ok(buttons.every((b) => typeof b.callback_data === 'string'), 'every button carries an action');
+});
+
+test('plan, language and chats moved one level down, into help', () => {
+  const front = mainMenu('ru', {}).inline_keyboard.flat().map((b) => b.callback_data);
+  for (const moved of ['m:plan', 'm:lang', 'm:chats']) {
+    assert.ok(!front.includes(moved), `${moved} must not be on the front menu`);
+  }
+  const help = helpKb('ru').inline_keyboard.flat().map((b) => b.callback_data);
+  assert.deepEqual(help, ['m:plan', 'm:lang', 'm:chats', 'm:home'], 'and they must be reachable there');
 });
 
 test('the toggle button shows the current state', () => {
@@ -521,7 +533,14 @@ await (async () => {
     }
   });
 
-  test('/bind is offered in groups and nowhere else', () => {
+  test('the slash list is only what is worth typing', () => {
+  assert.deepEqual(COMMAND_SETS.PRIVATE, ['start', 'add', 'help']);
+  for (const retired of ['list', 'chats', 'pause', 'resume', 'plan', 'lang']) {
+    assert.ok(!COMMAND_SETS.PRIVATE.includes(retired), `${retired} should not be advertised`);
+  }
+});
+
+test('/bind is offered in groups and nowhere else', () => {
     for (const call of api.calls) {
       const names = call.commands.map((c) => c.command);
       if (call.options.scope.type === 'all_group_chats') {
@@ -682,6 +701,27 @@ await (async () => {
     assert.equal(toggle.text, LOCALES.ru['btn.toggleOff'], 'monitoring is off, the button must say so');
   });
   store.setMonitoring.run(1, UID);
+
+  const helpPressed = await drive(pressUpdate('m:help', UID), UID);
+  test('help is the second level, not a dead end', () => {
+    const edit = helpPressed.find((c) => c.method === 'editMessageText');
+    assert.ok(edit, 'help replaces the menu message');
+    assert.deepEqual(
+      edit.payload.reply_markup.inline_keyboard.flat().map((b) => b.callback_data),
+      ['m:plan', 'm:lang', 'm:chats', 'm:home'],
+    );
+  });
+
+  const typedList = await drive(
+    textUpdate('/list', UID, [{ type: 'bot_command', offset: 0, length: 5 }]),
+    UID,
+  );
+  test('a command dropped from the slash list still answers when typed', () => {
+    assert.ok(
+      typedList.some((c) => c.method === 'sendMessage'),
+      '/list is no longer advertised, but anyone who learned it keeps it',
+    );
+  });
 
   // the language-mismatch bug: the pinned keyboard kept the old labels until
   // something re-sent it, so the menu could sit in a language the user had left

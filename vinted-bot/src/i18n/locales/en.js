@@ -17,11 +17,13 @@ export const en = {
 
 <b>Groups and topics</b>
 • Create a group → add the bot as admin → type <code>/bind</code> there.
-• Turn on Topics in the group and the bot creates a topic per search by itself — nothing manual.
+• Turn on Topics and the bot creates a topic per search by itself.
 • Channel: add the bot as admin and forward me any post from it.
 
-<b>Commands</b>
-/add /list /chats /bind /pause /resume /plan /lang`,
+<b>The menu</b> has four buttons: add, my links, monitoring, help.
+Plan, language and your chats live on this screen, in the buttons below.
+
+<b>Commands:</b> /start, /add, /help — everything else is a button.`,
 
   'add.askUrl': `Send a Vinted search URL.
 
@@ -125,6 +127,7 @@ Example:
     'ℹ️ Group "{title}" became a supergroup — moved {count} search(es) to the new chat, nothing for you to do.',
 
   // Telegram command menu (setMyCommands)
+  'cmd.start': 'Start the bot',
   'cmd.add': 'Add a link',
   'cmd.list': 'My links',
   'cmd.chats': 'My chats and topics',

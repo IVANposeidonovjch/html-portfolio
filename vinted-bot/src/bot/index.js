@@ -5,8 +5,8 @@ import { LANGS, isLang, resolveLang, t } from '../i18n/index.js';
 import { logger } from '../util/logger.js';
 import { InvalidVintedUrl, parseSearchUrl } from '../vinted/url.js';
 import {
-  backRow, cancelKb, chatsKb, confirmDeleteKb, destinationKb, langKb, mainMenu, menuOnlyKb, searchKb,
-  searchListKb, topicKb,
+  backRow, cancelKb, chatsKb, confirmDeleteKb, destinationKb, helpKb, langKb, mainMenu, menuOnlyKb,
+  searchKb, searchListKb, topicKb,
 } from './keyboards.js';
 
 /** Short-lived per-user wizard state (add-link / rename flows). */
@@ -119,24 +119,34 @@ export function createBot() {
     await showHome(ctx);
   });
 
-  /** The single message that carries the menu. */
-  async function showHome(ctx, textKey = 'menu.title') {
+  /** The single message that carries the four-button menu. */
+  async function showHome(ctx) {
     const { user, lang } = who(ctx);
-    await render(ctx, t(lang, textKey), {
+    await render(ctx, t(lang, 'menu.title'), {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
       reply_markup: mainMenu(lang, { monitoring: !!user.monitoring_enabled }),
     });
   }
 
-  bot.chatType('private').command('help', (ctx) => showHome(ctx, 'help.text'));
+  /** Help doubles as the second level: plan, language and chats live here. */
+  async function showHelp(ctx) {
+    const { lang } = who(ctx);
+    await render(ctx, t(lang, 'help.text'), {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      reply_markup: helpKb(lang),
+    });
+  }
+
+  bot.chatType('private').command('help', showHelp);
   bot.callbackQuery('m:home', async (ctx) => {
     await ctx.answerCallbackQuery();
     await showHome(ctx);
   });
   bot.callbackQuery('m:help', async (ctx) => {
     await ctx.answerCallbackQuery();
-    await showHome(ctx, 'help.text');
+    await showHelp(ctx);
   });
 
   /* ------------------------------- language ------------------------------ */
