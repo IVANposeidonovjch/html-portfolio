@@ -12,15 +12,12 @@ const fmtMoney = (m) => {
 
 /** Caption for a new-listing notification (HTML parse mode). */
 export function renderItem(item, searchName, lang = 'en') {
-  const lines = [`<b>${esc(item.title || t(lang, 'item.noTitle'))}</b>`];
+  const lines = [`📌 <b>${esc(item.title || t(lang, 'item.noTitle'))}</b>`];
 
   const price = fmtMoney(item.price);
-  if (price) lines.push(`💰 Price: <b>${esc(price)}</b>`);
-  if (item.brand) lines.push(`🏷 Brand: ${esc(item.brand)}`);
-  const meta = [];
-  if (item.size) meta.push(`📏 ${esc(item.size)}`);
-  if (item.condition) meta.push(`✨ ${esc(item.condition)}`);
-  if (meta.length) lines.push(meta.join('   '));
+  if (price) lines.push(`💰 <b>Price</b> : ${esc(price)}`);
+  if (item.brand) lines.push(`🏷 <b>Brand</b> : ${esc(item.brand)}`);
+  if (item.size) lines.push(`📏 <b>Size</b> : ${esc(item.size)}`);
   if (searchName) lines.push(`#${esc(searchName.replace(/\s+/g, ''))}`);
 
   return lines.join('\n');
