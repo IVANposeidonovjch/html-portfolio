@@ -229,12 +229,48 @@ test('normalizes object prices and renders a caption', () => {
   const item = normalizeItem(rawItem(1), 'www.vinted.de');
   assert.equal(item.price.amount, 120);
   const text = renderItem(item, 'Raf', 'ru');
-  assert.match(text, /120 EUR/);
-  assert.match(text, /с защитой 133.50 EUR/);
-  assert.match(text, /Raf Simons/);
-  // the same listing, another language
-  assert.match(renderItem(item, 'Raf', 'de'), /133.50 EUR mit Käuferschutz/);
+  assert.match(text, /📌 <b>Raf Simons Tee 1<\/b>/);
+  assert.match(text, /💰 Цена : 120€/, 'ISO codes are shown as symbols');
+  assert.match(text, /🏷 Бренд : Raf Simons/);
+  assert.match(text, /📏 Размер : M/);
+  assert.match(text, /#Raf$/m);
+  assert.ok(!/защит|261|133/.test(text), 'the protection line is gone');
+  assert.ok(!text.includes('seller'), 'and so is the seller line');
+  assert.match(renderItem(item, 'Raf', 'de'), /💰 Preis : 120€/);
   assert.equal(itemKeyboard(item, 'de').inline_keyboard[0][0].text, 'URL');
+});
+
+test('a search name becomes a usable hashtag', () => {
+  const withName = (name) => renderItem(normalizeItem(rawItem(9), 'www.vinted.de'), name, 'en');
+  assert.match(withName('Avant mix'), /#Avantmix$/m, 'a tag stops at the first space');
+  assert.match(withName('Raf 🔥'), /#Raf$/m, 'emoji cannot live in a tag');
+  assert.match(withName('Helmut_Lang'), /#Helmut_Lang$/m, 'underscores survive');
+  assert.match(withName('Сумки'), /#Сумки$/m, 'non-latin letters survive');
+  assert.ok(!withName('🔥').includes('#'), 'a name with nothing taggable adds no empty tag');
+});
+
+test('the help example is exactly what the bot really sends', () => {
+  // the example drifted from renderItem() once; this keeps them married
+  const sample = normalizeItem(
+    {
+      id: 1,
+      title: 'Raf Simons bomber',
+      brand_title: 'Raf Simons',
+      size_title: 'L',
+      price: { amount: '240.0', currency_code: 'EUR' },
+      photo: { url: 'https://img/1.jpg' },
+      url: 'https://www.vinted.de/items/1',
+    },
+    'www.vinted.de',
+  );
+  for (const lang of Object.keys(LOCALES)) {
+    const rendered = renderItem(sample, 'Raf', lang);
+    assert.ok(
+      LOCALES[lang]['help.text'].includes(rendered),
+      `${lang}: help shows an alert the code no longer produces\n--- code ---\n${rendered}`,
+    );
+    assert.match(LOCALES[lang]['help.text'], /\[ URL \]/, `${lang}: the URL button is missing`);
+  }
 });
 
 /* --------------------------------- i18n --------------------------------- */
@@ -303,7 +339,7 @@ test('reads the svc-catalogue item shape (item_box, no flat brand/size)', () => 
   assert.equal(item.price.amount, 240);
   assert.equal(item.totalPrice.amount, 261.2);
   assert.equal(item.photoUrl, 'https://img/77.jpg');
-  assert.match(renderItem(item, 'Raf'), /240 EUR/);
+  assert.match(renderItem(item, 'Raf'), /💰 Price : 240€/);
 });
 
 test('flat fields still win over item_box when both are present', () => {

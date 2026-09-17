@@ -7,11 +7,11 @@ export const en = {
   'btn.help': '❓ Help',
   'btn.lang': '🌐 Language',
 
-  'start.text': `⚡️ <b>Vinted Monitor</b>
+  'start.text': `⚡️ <b>Vinted Monitor</b> 👟👜
 
-You set up the search on Vinted — I watch it and push every new listing here seconds after it goes live. While everyone else refreshes the page, you're already messaging the seller.
+🔎 You set up the search on Vinted — I watch it and 🔔 push every new listing here seconds after it goes live. While everyone else refreshes the page, you're already messaging the seller. 🏃‍♂️💨
 
-One link = one search. As many as you like, to your DMs or into group topics.`,
+🔗 One link = one search. As many as you like — 📩 to your DMs or 🧵 into group topics.`,
 
   'help.text': `⚡️ <b>Vinted Monitor</b> — new Vinted listings in seconds.
 
@@ -23,9 +23,11 @@ One link = one search. As many as you like, to your DMs or into group topics.`,
 
 🔔 <b>What an alert looks like</b>
 <i>[item photo]</i>
-<b>Raf Simons bomber</b>
-💶 <b>240 EUR</b> <i>(261.20 with protection)</i>
-🏷 Raf Simons   📏 L   ✨ Very good
+📌 <b>Raf Simons bomber</b>
+💰 Price : 240€
+🏷 Brand : Raf Simons
+📏 Size : L
+#Raf
 [ URL ]
 
 🧵 <b>Groups and topics</b>
@@ -131,7 +133,9 @@ Example:
   'common.disabled': 'Disabled',
 
   'item.noTitle': 'Untitled',
-  'item.protection': '{total} with protection',
+  'item.price': 'Price',
+  'item.brand': 'Brand',
+  'item.size': 'Size',
   'item.button': 'URL',
 
   'send.searchDisabled': '⚠️ Search "{name}" was paused: I cannot post to its chat ({error}).',

@@ -7,11 +7,11 @@ export const de = {
   'btn.help': '❓ Hilfe',
   'btn.lang': '🌐 Sprache',
 
-  'start.text': `⚡️ <b>Vinted Monitor</b>
+  'start.text': `⚡️ <b>Vinted Monitor</b> 👟👜
 
-Du stellst die Suche auf Vinted ein — ich behalte sie im Auge und schicke dir jede neue Anzeige Sekunden nach der Veröffentlichung. Während andere die Seite neu laden, schreibst du schon dem Verkäufer.
+🔎 Du stellst die Suche auf Vinted ein — ich behalte sie im Auge und 🔔 schicke dir jede neue Anzeige Sekunden nach der Veröffentlichung. Während andere die Seite neu laden, schreibst du schon dem Verkäufer. 🏃‍♂️💨
 
-Ein Link = eine Suche. Beliebig viele, in den Chat oder in Themen einer Gruppe.`,
+🔗 Ein Link = eine Suche. Beliebig viele — 📩 in den Chat oder 🧵 in Themen einer Gruppe.`,
 
   'help.text': `⚡️ <b>Vinted Monitor</b> — neue Vinted-Anzeigen in Sekunden.
 
@@ -23,9 +23,11 @@ Ein Link = eine Suche. Beliebig viele, in den Chat oder in Themen einer Gruppe.`
 
 🔔 <b>So sieht ein Treffer aus</b>
 <i>[Foto des Artikels]</i>
-<b>Raf Simons bomber</b>
-💶 <b>240 EUR</b> <i>(261,20 mit Käuferschutz)</i>
-🏷 Raf Simons   📏 L   ✨ Very good
+📌 <b>Raf Simons bomber</b>
+💰 Preis : 240€
+🏷 Marke : Raf Simons
+📏 Größe : L
+#Raf
 [ URL ]
 
 🧵 <b>Gruppen und Themen</b>
@@ -131,7 +133,9 @@ Beispiel:
   'common.disabled': 'Deaktiviert',
 
   'item.noTitle': 'Ohne Titel',
-  'item.protection': '{total} mit Käuferschutz',
+  'item.price': 'Preis',
+  'item.brand': 'Marke',
+  'item.size': 'Größe',
   'item.button': 'URL',
 
   'send.searchDisabled': '⚠️ Suche „{name}“ pausiert: Ich kann nicht in den Zielchat schreiben ({error}).',
