@@ -6,12 +6,13 @@
  *
  *   PROXY=http://user:pass@host:port node probe-firehose.mjs --selftest
  *   PROXY=http://user:pass@host:port node probe-firehose.mjs www.vinted.de
+ *   PROXY=…  node probe-firehose.mjs www.vinted.de --ordering-only
  *
  * It changes nothing and touches no bot code. It answers one question: can one
  * unfiltered newest-first feed per domain replace N filtered searches?
  *
  * v2 would poll that feed once, match every user's filters in memory, and never
- * send a per-user request at all. That only works if five things hold, and each
+ * send a per-user request at all. That only works if six things hold, and each
  * section below measures one of them:
  *
  *   1. the API serves a bare feed with no filters at all (the bot refuses such
@@ -21,7 +22,13 @@
  *   3. one page can be made big enough to be worth polling;
  *   4. listings arrive slower than one page per poll, or page 1 overflows
  *      between polls and the missed listings are gone for good;
- *   5. the bandwidth is payable at that poll rate.
+ *   5. the bandwidth is payable at that poll rate;
+ *   6. page 1 really is the newest listings — MEASURED 18.09.2026: on the bare
+ *      feed it is not, so section 6 asks whether any filter restores it, and
+ *      whether the items that jump the queue are promoted ones.
+ *
+ * Section 6 is the one that decides between a per-category firehose and no
+ * firehose at all, and `--ordering-only` runs it without the slow sections.
  *
  * Paste the REPORT block back. Run it again at a busy hour: velocity measured
  * at 03:00 is not the number v2 has to survive.
@@ -36,6 +43,9 @@ const UA =
 const PROXY = process.env.PROXY || process.env.HTTPS_PROXY || '';
 const POLLS = Number(process.env.FIREHOSE_POLLS || 6);
 const GAP_MS = Number(process.env.FIREHOSE_GAP_MS || 10000);
+const ORDER_POLLS = Number(process.env.ORDER_POLLS || 4);
+const ORDER_GAP_MS = Number(process.env.ORDER_GAP_MS || 8000);
+const ORDERING_ONLY = process.argv.includes('--ordering-only');
 
 /* ---------------- minimal HTTPS-over-proxy agent (CONNECT tunnel) --------- */
 
@@ -310,7 +320,7 @@ const avgOf = (values) => {
 let timePath = null; // the timestamp field used for the velocity cross-check
 let presenceSummary = [];
 
-if (FEED_WORKS) {
+if (FEED_WORKS && !ORDERING_ONLY) {
   say();
   say('--- 2. raw items, complete and untruncated ---');
   for (const [n, item] of feed.items.slice(0, 3).entries()) {
@@ -368,7 +378,7 @@ if (FEED_WORKS) {
 let maxPerPage = null;
 let bytesAtMax = null;
 
-if (FEED_WORKS) {
+if (FEED_WORKS && !ORDERING_ONLY) {
   say();
   say('--- 3. how big can one page be? ---');
   // stop as soon as one size does not saturate: the ceiling is below it
@@ -414,7 +424,7 @@ let overflowed = false;
 let avgBytes = null;
 let avgItems = null;
 
-if (FEED_WORKS) {
+if (FEED_WORKS && !ORDERING_ONLY) {
   say();
   say(`--- 4. listing velocity (${POLLS} polls, ~${Math.round(GAP_MS / 1000)}s apart) ---`);
   const pageSize = maxPerPage ?? 40;
@@ -494,7 +504,7 @@ let interval = null;
 let gbMonthPolling = null;
 let gbMonthFloor = null;
 
-if (FEED_WORKS && avgBytes && avgItems) {
+if (FEED_WORKS && !ORDERING_ONLY && avgBytes && avgItems) {
   say();
   say('--- 5. bandwidth ---');
   kbPerItem = avgBytes / avgItems / 1024;
@@ -523,6 +533,267 @@ if (FEED_WORKS && avgBytes && avgItems) {
   say('(today the same coverage costs one request per search per interval — compare against that)');
 }
 
+/* ------------- 6. does any filter restore newest-first order? ------------- */
+
+/**
+ * MEASURED 18.09.2026: the bare feed does NOT come back newest-first. The
+ * theory is that an unfiltered request is a shop window — promoted listings are
+ * injected above the chronological ones — and that asking for anything at all
+ * turns it back into a real query.
+ *
+ * That theory is worth testing rather than believing, because the two outcomes
+ * point at completely different products:
+ *
+ *   ordering returns under a filter -> a firehose per CATEGORY is on the table.
+ *     Not one poll for everything, but one poll per broad category shared by
+ *     every user watching inside it — far fewer requests than one per search.
+ *   ordering stays broken           -> no firehose of any shape works here,
+ *     because "what is new since last time" cannot be answered from page 1.
+ *
+ * Three properties are measured per filter level, and a firehose needs all of
+ * them. Page-descending says the page is sorted. Monotonic max id says
+ * consecutive polls move forward.
+ *
+ * Late arrivals are the third and the sharpest, so the definition has to be
+ * exact: a listing seen for the first time now, whose id falls strictly INSIDE
+ * the id range page 1 covered at the previous poll. Last time the page claimed
+ * to hold everything between its lowest and highest id; this listing was inside
+ * that interval and was not on it. That is a hole in the page, and a firehose
+ * reading page 1 would have missed the listing for good.
+ *
+ * Anything merely older than the whole previous page (a promoted listing from
+ * last year injected at the top) is not counted here — it is noise above the
+ * chronology, which `jumped` already measures, not a missed listing.
+ */
+
+const PROMOTED_RE = /promot|sponsor|boost|advert|is_ad$|^ad_|featur|highlight|bump/i;
+
+/** Flags on an item that plausibly mean "this one paid to be here". */
+function promoFlags(item) {
+  const found = [];
+  const walk = (node, prefix = '', depth = 0) => {
+    if (!node || typeof node !== 'object' || depth > 2) return;
+    for (const [key, value] of Object.entries(node)) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      if (PROMOTED_RE.test(key) && (value === true || value === 1 || (typeof value === 'string' && value))) {
+        found.push(`${path}=${value}`);
+      }
+      if (value && typeof value === 'object') walk(value, path, depth + 1);
+    }
+  };
+  walk(item);
+  return found;
+}
+
+/**
+ * Positions holding an item newer items were listed below — the signature of
+ * something injected above the chronology rather than of a different sort.
+ */
+function jumpedTheQueue(ids) {
+  const out = [];
+  let maxBelow = -Infinity;
+  for (let i = ids.length - 1; i >= 0; i--) {
+    if (ids[i] < maxBelow) out.push(i);
+    maxBelow = Math.max(maxBelow, ids[i]);
+  }
+  return out.reverse();
+}
+
+const orderingRuns = [];
+
+if (FEED_WORKS) {
+  say();
+  say(`--- 6. ordering under filters (${ORDER_POLLS} polls each, ~${Math.round(ORDER_GAP_MS / 1000)}s apart) ---`);
+
+  // A high-volume brand and a broad category, discovered from the feed itself
+  // rather than guessed: the most common ones on page 1 are by definition the
+  // ones with enough flow to measure.
+  const modeOf = (path) => {
+    const counts = new Map();
+    for (const item of feed.items) {
+      const value = dig(item, path);
+      if (value != null) counts.set(value, (counts.get(value) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0] ?? null;
+  };
+  const brandMode = modeOf('brand_id') ?? modeOf('brand.id');
+  const catalogMode = modeOf('catalog_id') ?? modeOf('catalog.id');
+  const brandId = process.env.BRAND_ID || brandMode?.[0];
+  const catalogId = process.env.CATALOG_ID || catalogMode?.[0];
+  say(
+    `brand   : ${brandId ?? 'NOT FOUND on page 1 — set BRAND_ID=… to test one'}` +
+      (brandMode ? ` (${brandMode[1]}/${feed.items.length} items on page 1)` : ''),
+  );
+  say(
+    `catalog : ${catalogId ?? 'NOT FOUND on page 1 — set CATALOG_ID=… to test one'}` +
+      (catalogMode ? ` (${catalogMode[1]}/${feed.items.length} items on page 1)` : ''),
+  );
+
+  // id filters MUST travel as attribute_ids[...] — the plain names are accepted
+  // and silently dropped, which would make a filtered run secretly unfiltered
+  // and its verdict worthless (see src/vinted/endpoints.js).
+  const VARIANTS = [
+    ['none (control)', {}],
+    ['price_from=0', { price_from: '0' }],
+    ...(catalogId ? [[`catalog=${catalogId}`, { 'attribute_ids[catalog]': String(catalogId) }]] : []),
+    ...(brandId ? [[`brand=${brandId}`, { 'attribute_ids[brand]': String(brandId) }]] : []),
+  ];
+
+  const pageSize = Math.min(maxPerPage ?? 96, 96);
+  const buildUrl = (params, withOrder = true) => {
+    const sp = new URLSearchParams(params);
+    sp.set('page', '1');
+    sp.set('per_page', String(pageSize));
+    if (withOrder) sp.set('order', 'newest_first');
+    return `${feed.base}?${sp.toString()}`;
+  };
+
+  for (const [label, params] of VARIANTS) {
+    say();
+    say(`[${label}]`);
+    const run = {
+      label,
+      polls: 0,
+      violations: 0,
+      pairs: 0,
+      jumped: 0,
+      late: 0,
+      fresh: 0,
+      monotonic: true,
+      promotedJumped: 0,
+      promotedInPlace: 0,
+      samples: [],
+      flagsSeen: new Set(),
+      filterEffective: null,
+    };
+
+    const seen = new Set();
+
+    for (let n = 0; n < ORDER_POLLS; n++) {
+      if (n) await sleep(ORDER_GAP_MS);
+      try {
+        const r = await get(buildUrl(params), feed.headers, 0);
+        let items = null;
+        try {
+          items = extractItems(JSON.parse(r.body));
+        } catch {}
+        if (!items?.length) {
+          say(`  poll ${n + 1}: HTTP ${r.status} — no items`);
+          continue;
+        }
+        const ids = items.map((i) => Number(i.id)).filter(Number.isFinite);
+        const violations = ids.filter((id, i) => i > 0 && ids[i - 1] < id).length;
+        const jumped = jumpedTheQueue(ids);
+        const maxId = Math.max(...ids);
+        const minId = Math.min(...ids);
+
+        // first seen now, but inside the interval the previous page claimed to
+        // cover — the page had a hole exactly where this listing belonged
+        const fresh = ids.filter((id) => !seen.has(id));
+        const previous = run.samples.at(-1);
+        const late = previous ? fresh.filter((id) => id < previous.maxId && id > previous.minId) : [];
+
+        for (const [i, item] of items.entries()) {
+          const flags = promoFlags(item);
+          for (const f of flags) run.flagsSeen.add(f.split('=')[0]);
+          if (!flags.length) continue;
+          if (jumped.includes(i)) run.promotedJumped++;
+          else run.promotedInPlace++;
+        }
+
+        if (previous && maxId < previous.maxId) run.monotonic = false;
+        run.polls++;
+        run.violations += violations;
+        run.pairs += ids.length - 1;
+        run.jumped += jumped.length;
+        run.late += late.length;
+        if (previous) run.fresh += fresh.length;
+        run.samples.push({ maxId, minId, count: ids.length });
+        for (const id of ids) seen.add(id);
+
+        say(
+          `  poll ${n + 1}: items=${String(ids.length).padStart(3)} maxId=${maxId} ` +
+            `out-of-order=${String(violations).padStart(3)}/${ids.length - 1} ` +
+            `jumped=${String(jumped.length).padStart(3)}${jumped.length ? ` at [${jumped.slice(0, 6).join(',')}${jumped.length > 6 ? '…' : ''}]` : ''}` +
+            (n ? ` new=${fresh.length} late=${late.length}` : ' (baseline)'),
+        );
+      } catch (e) {
+        say(`  poll ${n + 1}: ERROR ${e.message}`);
+      }
+    }
+
+    // Is this filter doing anything at all? A filter the server ignores would
+    // return the control's listings and a clean verdict would be meaningless.
+    if (Object.keys(params).length) {
+      try {
+        const r = await get(buildUrl(params), feed.headers, 0);
+        const items = extractItems(JSON.parse(r.body)) ?? [];
+        const control = orderingRuns[0]?.sampleIds;
+        if (control && items.length) {
+          const overlap = items.filter((i) => control.has(Number(i.id))).length;
+          run.filterEffective = overlap < items.length * 0.9;
+          say(`  filter check: ${overlap}/${items.length} of these also appear unfiltered — ${run.filterEffective ? 'the filter narrows' : 'LOOKS IGNORED, verdict below is meaningless'}`);
+        }
+      } catch {
+        /* the check is a nicety, not the measurement */
+      }
+      await sleep(900);
+    } else {
+      run.sampleIds = seen;
+      // Is order=newest_first doing anything at all on a bare feed? If dropping
+      // the parameter changes nothing, the diagnosis is "the API ignores it
+      // here", which is a different problem from "promoted listings jump the
+      // queue" — and only the second one a filter could fix.
+      try {
+        const [withOrder, without] = [
+          await get(buildUrl(params, true), feed.headers, 0),
+          await get(buildUrl(params, false), feed.headers, 0),
+        ];
+        const idsOf = (r) => (extractItems(JSON.parse(r.body)) ?? []).slice(0, 10).map((i) => Number(i.id));
+        const a = idsOf(withOrder);
+        const b = idsOf(without);
+        const same = a.length && a.every((id, i) => id === b[i]);
+        say(
+          `  order param : dropping order=newest_first ${same ? 'changes NOTHING — the API looks like it ignores it here' : 'changes the page, so the parameter is read'}` +
+            ' (single shot, the feed does move between the two calls)',
+        );
+      } catch {
+        /* diagnostic only */
+      }
+      await sleep(900);
+    }
+
+    run.descending = run.pairs > 0 && run.violations === 0;
+    run.clean = run.descending && run.monotonic && run.late === 0 && run.polls > 1;
+    orderingRuns.push(run);
+    say(
+      `  => ${run.clean ? 'CLEAN' : 'BROKEN'}: descending=${run.descending ? 'yes' : `no (${run.violations}/${run.pairs} pairs)`}, ` +
+        `monotonic=${run.monotonic ? 'yes' : 'NO'}, late arrivals=${run.late}` +
+        (run.promotedJumped || run.promotedInPlace
+          ? `, promo flags on ${run.promotedJumped} of the queue-jumpers vs ${run.promotedInPlace} in place`
+          : ''),
+    );
+  }
+
+  say();
+  say('summary');
+  say('  filter                 descending  monotonic  late  jumped  new/poll  verdict');
+  for (const r of orderingRuns) {
+    const perPoll = r.polls > 1 ? r.fresh / (r.polls - 1) : null;
+    say(
+      `  ${r.label.padEnd(22)} ${(r.descending ? 'yes' : `no ${r.violations}/${r.pairs}`).padEnd(11)} ` +
+        `${(r.monotonic ? 'yes' : 'NO').padEnd(10)} ${String(r.late).padEnd(5)} ${String(r.jumped).padEnd(7)} ` +
+        `${num(perPoll, 1).padEnd(9)} ${r.clean ? 'CLEAN' : 'BROKEN'}`,
+    );
+  }
+  say(`  (new/poll is over ~${Math.round(ORDER_GAP_MS / 1000)}s — it sizes how often each category would need polling)`);
+  const flags = new Set(orderingRuns.flatMap((r) => [...r.flagsSeen]));
+  say(`  promo-looking fields seen on items: ${flags.size ? [...flags].join(', ') : 'none — the theory has no direct evidence in the payload'}`);
+}
+
+const cleanFiltered = orderingRuns.filter((r) => r.clean && r.label !== 'none (control)');
+const controlRun = orderingRuns.find((r) => r.label === 'none (control)');
+
 /* ---------------------------- REPORT -------------------------------------- */
 
 say();
@@ -537,15 +808,31 @@ if (FEED_WORKS) {
   say(`items/sec       : ${num(itemsPerSec, 3)} by id${tsItemsPerSec ? `, ${num(tsItemsPerSec, 3)} by timestamp` : ''}${overflowed ? '  (FLOOR — page 1 overflowed)' : ''}`);
   say(`poll interval   : ${interval ? `${interval}s` : '—'} to keep page 1 from overflowing`);
   say(`bandwidth       : ${num(kbPerItem, 2)} KB/item · ${num(gbMonthPolling, 1)} GB/month polling · ${num(gbMonthFloor, 1)} GB/month floor`);
+  if (orderingRuns.length) {
+    say(`ordering bare   : ${controlRun?.clean ? 'clean' : `BROKEN (${controlRun?.violations}/${controlRun?.pairs} pairs out of order, ${controlRun?.late} late arrivals)`}`);
+    say(
+      `ordering filtered: ${
+        cleanFiltered.length
+          ? `RESTORED under ${cleanFiltered.map((r) => r.label).join(', ')}`
+          : 'STILL BROKEN under every filter tried'
+      }`,
+    );
+  }
   say(
     `verdict         : ${
-      !ordered
-        ? 'NO — the feed is not ordered newest-first, a firehose would read the wrong end'
-        : presenceSummary.some((s) => s.includes('=NO'))
-          ? 'PARTIAL — some filter ids are missing from the items; v2 can only match on what is present'
-          : overflowed
-            ? 'FEASIBLE BUT TIGHT — page 1 overflowed at this poll gap; re-run at a peak hour before committing'
-            : 'FEASIBLE — bare feed, ids to match on, and page 1 outlives the poll interval'
+      orderingRuns.length && !cleanFiltered.length && !controlRun?.clean
+        ? 'NO FIREHOSE OF ANY SHAPE — page 1 is not the newest listings even under a filter, ' +
+          'so "what is new since last time" cannot be answered from it. Stay on v1 + capacity enforcement.'
+        : orderingRuns.length && cleanFiltered.length && !controlRun?.clean
+          ? `MIDDLE GROUND OPEN — the bare feed is unusable but ${cleanFiltered[0].label} polls clean. ` +
+            'One shared poll per category, not one per search. Worth designing; re-run at a peak hour first.'
+          : !ordered
+            ? 'NO — the feed is not ordered newest-first, a firehose would read the wrong end'
+            : presenceSummary.some((s) => s.includes('=NO'))
+              ? 'PARTIAL — some filter ids are missing from the items; v2 can only match on what is present'
+              : overflowed
+                ? 'FEASIBLE BUT TIGHT — page 1 overflowed at this poll gap; re-run at a peak hour before committing'
+                : 'FEASIBLE — bare feed, ids to match on, and page 1 outlives the poll interval'
     }`,
   );
 } else {
