@@ -216,13 +216,11 @@ Example:
 
   // what arrives when a tier is reached
   'tier.welcome.basic': "▬▬ι═══════ﺤ\n\nThe hunt is on, <b>Hunter</b> 🔪\nNow {links} links and a check every {every}.\nSet your links 🪤 — the rest is my job.",
-  'tier.welcome.pro': "ᡕᠵデ气亠\n\nBattle-hardened, reading the field on another level, <b>Ranger</b> ⚔️\nNow {links} links and a check every {every}, burst {burst} — finds land in a volley instead of trickling in.\nEveryone else is still hitting F5. 😌",
-  'tier.welcome.turbo': "︻芫═───\n\nYou are <b>Sniper Elite</b> — spotting a target and taking it is in your blood. 🩸\nWelcome to the supreme rank 🥷\n<b>Sniper Elite</b>: {links} links, burst {burst}, a check every {every}.\n\nThe rare piece goes to whoever opened it first. That's you now. 💎\nEnjoy)",
+  'tier.welcome.pro': "ᡕᠵデ气亠\n\nYou are battle-hardened and you read the field differently, <b>ranger</b> ⚔️\nNow {links} links and a check every {every},\nburst {burst} — finds land in a volley, not one at a time with pauses.\nEveryone else is still hitting F5. 😌",
+  'tier.welcome.turbo': "︻芫═───\n\nYou are <b>Sniper Elite</b> — seeing a target and taking it is in your blood. 🩸\nWelcome to the supreme rank🥷\n<b>Sniper Elite</b>: {links} links, burst {burst}, a check every {every}.\n\nThe rare piece goes to whoever opened it first. Now that is you. 💎\nEnjoy)",
   'tier.welcome.elite_max': "▄︻デ══━一\n\nThis rank was never on the price list, <b>Elite Max</b> 🔒\n{links} links, burst {burst}, a check every {every} — nothing on sale comes close.\nNobody else has it. 🤫",
 
   // how an interval reads to a person
   'unit.sec': '{n}s',
-  'unit.min.one': '{n} minute',
-  'unit.min.few': '{n} minutes',
-  'unit.min.many': '{n} minutes',
+  'unit.min': '{n}m',
 };

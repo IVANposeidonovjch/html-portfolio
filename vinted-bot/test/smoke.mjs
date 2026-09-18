@@ -488,16 +488,17 @@ test('each tier welcome opens with its own glyph on its own line', () => {
   assert.equal(glyphs.size, 4, 'every tier needs its own glyph, not a shared one');
 });
 
-test('a long interval is spoken in minutes, a short one in seconds', () => {
-  assert.equal(formatEvery('ru', 300), '5 минут');
-  assert.equal(formatEvery('en', 300), '5 minutes');
+test('a long interval is abbreviated to minutes, a short one stays in seconds', () => {
+  for (const lang of Object.keys(LOCALES)) {
+    assert.equal(formatEvery(lang, 300), '5m', `${lang}: minutes read the same everywhere`);
+    assert.equal(formatEvery(lang, 120), '2m', `${lang}: no plural form to get wrong`);
+    assert.equal(formatEvery(lang, 900), '15m');
+    // the tier every user starts paying for is the one that must not say "300"
+    assert.equal(formatEvery(lang, cfg.intervalFor('basic')), '5m');
+  }
   assert.equal(formatEvery('ru', 60), '60 с', 'a single minute still reads as seconds');
   assert.equal(formatEvery('en', 30), '30s');
   assert.equal(formatEvery('ru', 90), '90 с', 'a ragged interval is not rounded into minutes');
-  assert.equal(formatEvery('ru', 120), '2 минуты', 'Russian picks the 2-4 form');
-  assert.equal(formatEvery('uk', 900), '15 хвилин');
-  // the tier every user starts paying for is the one that must not say "300"
-  assert.equal(formatEvery('ru', cfg.intervalFor('basic')), '5 минут');
 });
 
 test('the welcome speaks in numbers the config really holds', () => {
@@ -524,8 +525,9 @@ test('each welcome names the tier it congratulates', () => {
   for (const lang of Object.keys(LOCALES)) {
     for (const tier of ['basic', 'pro', 'turbo', 'elite_max']) {
       const name = LOCALES[lang][`plan.name.${tier}`].replace(/\s*🔒/, '');
+      // the copy is written by hand and may lowercase a rank mid-sentence
       assert.ok(
-        LOCALES[lang][`tier.welcome.${tier}`].includes(name),
+        LOCALES[lang][`tier.welcome.${tier}`].toLowerCase().includes(name.toLowerCase()),
         `${lang}/${tier}: the copy never says which tier this is`,
       );
     }
@@ -1444,7 +1446,7 @@ await (async () => {
   test('reaching a tier brings its own congratulation, with real numbers', () => {
     const welcome = climbed.find((c) => c.method === 'sendMessage' && c.payload.chat_id === 9100);
     assert.ok(welcome, 'the user must hear about it');
-    assert.match(welcome.payload.text, /Ranger/);
+    assert.match(welcome.payload.text, /ranger/i);
     assert.match(welcome.payload.text, new RegExp(String(cfg.searchLimitFor('pro'))), 'its link count');
     assert.match(welcome.payload.text, new RegExp(String(cfg.intervalFor('pro'))), 'its interval');
     assert.ok(!/\{/.test(welcome.payload.text), 'no placeholder may survive into the copy');
