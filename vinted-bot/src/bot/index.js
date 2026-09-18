@@ -3,7 +3,7 @@ import {
   PLANS, PUBLIC_PLANS, SELLABLE_PLANS, burstFor, config, intervalFor, searchLimitFor, starsFor, usdFor,
 } from '../config.js';
 import * as store from '../db/index.js';
-import { LANGS, isLang, resolveLang, t } from '../i18n/index.js';
+import { LANGS, formatEvery, isLang, resolveLang, t } from '../i18n/index.js';
 import { logger } from '../util/logger.js';
 import { InvalidVintedUrl, parseSearchUrl } from '../vinted/url.js';
 import { DEMO_SEARCH, demoItem, itemKeyboard, renderItem } from './format.js';
@@ -687,7 +687,7 @@ export function createBot() {
     const lang = target?.lang || 'en';
     const text = t(lang, `tier.welcome.${plan}`, {
       links: searchLimitFor(plan),
-      interval: intervalFor(plan),
+      every: formatEvery(lang, intervalFor(plan)),
       burst: burstFor(plan),
     });
     const picture = imageFor(`tier_${plan}`);

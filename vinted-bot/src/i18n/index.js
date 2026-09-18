@@ -39,6 +39,28 @@ export function t(lang, key, vars = {}) {
   );
 }
 
+/** Russian and Ukrainian pick a different word for 1, 2-4 and the rest. */
+const SLAVIC = new Set(['ru', 'uk']);
+function pluralKey(lang, n) {
+  if (!SLAVIC.has(lang)) return n === 1 ? 'unit.min.one' : 'unit.min.many';
+  const tens = n % 100;
+  if (n % 10 === 1 && tens !== 11) return 'unit.min.one';
+  if (n % 10 >= 2 && n % 10 <= 4 && (tens < 12 || tens > 14)) return 'unit.min.few';
+  return 'unit.min.many';
+}
+
+/**
+ * An interval as a person would say it. "every 300 s" is a config value read
+ * aloud; "every 5 minutes" is what it means. Minutes only when the number
+ * divides cleanly and is worth converting — a minute stays "60 s", which is how
+ * a one-minute poll is actually spoken about.
+ */
+export function formatEvery(lang, seconds) {
+  const minutes = seconds / 60;
+  if (seconds <= 60 || !Number.isInteger(minutes)) return t(lang, 'unit.sec', { n: seconds });
+  return t(lang, pluralKey(lang, minutes), { n: minutes });
+}
+
 /** Every translation of one key — used to match menu buttons in any language. */
 export const allLabels = (key) => [
   ...new Set(Object.values(LOCALES).map((d) => d[key]).filter(Boolean)),

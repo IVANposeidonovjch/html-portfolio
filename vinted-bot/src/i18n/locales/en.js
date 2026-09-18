@@ -215,8 +215,14 @@ Example:
   'plan.next.same': '• the same, with {links} links instead of {currentLinks}',
 
   // what arrives when a tier is reached
-  'tier.welcome.basic': "▬▬ι═══════ﺤ\n\nNow your hunting has started, <b>Hunter</b>. 🎯 {links} links to set and a check every {interval}s — enough for the brands, the sizes and that price bracket you kept putting off.\nSet your traps 🪤 — the rest is my job.",
-  'tier.welcome.pro': "ᡕᠵデ气亠\n\nYou're battle-hardened now, <b>Ranger</b>, and you read the field on a different level. ⚔️ A check every {interval}s, {links} links, burst {burst} — finds land in a volley instead of trickling in.\nEveryone else is still hitting refresh. 😌",
-  'tier.welcome.turbo': "︻芫═───\n\nYou're an elite sniper — spotting a target and taking it is in your blood. 🥷 Happy to welcome you to the highest tier there is, <b>Sniper Elite</b>: {links} links, burst {burst}, a check every {interval}s.\nThe rare piece goes to whoever opened it first. That's you now. 💎\nEnjoy)",
-  'tier.welcome.elite_max': "▄︻デ══━一\n\nThis one was never on the price list, <b>Elite Max</b>. 🔒 A check every {interval}s, {links} links, burst {burst} — nothing on sale comes close.\nNobody else has it. 🤫",
+  'tier.welcome.basic': "▬▬ι═══════ﺤ\n\nThe hunt is on, <b>Hunter</b> 🔪\nNow {links} links and a check every {every}.\nSet your links 🪤 — the rest is my job.",
+  'tier.welcome.pro': "ᡕᠵデ气亠\n\nBattle-hardened, reading the field on another level, <b>Ranger</b> ⚔️\nNow {links} links and a check every {every}, burst {burst} — finds land in a volley instead of trickling in.\nEveryone else is still hitting F5. 😌",
+  'tier.welcome.turbo': "︻芫═───\n\nYou are <b>Sniper Elite</b> — spotting a target and taking it is in your blood. 🩸\nWelcome to the supreme rank 🥷\n<b>Sniper Elite</b>: {links} links, burst {burst}, a check every {every}.\n\nThe rare piece goes to whoever opened it first. That's you now. 💎\nEnjoy)",
+  'tier.welcome.elite_max': "▄︻デ══━一\n\nThis rank was never on the price list, <b>Elite Max</b> 🔒\n{links} links, burst {burst}, a check every {every} — nothing on sale comes close.\nNobody else has it. 🤫",
+
+  // how an interval reads to a person
+  'unit.sec': '{n}s',
+  'unit.min.one': '{n} minute',
+  'unit.min.few': '{n} minutes',
+  'unit.min.many': '{n} minutes',
 };

@@ -215,8 +215,14 @@ Beispiel:
   'plan.next.same': '• dasselbe, aber {links} Links statt {currentLinks}',
 
   // what arrives when a tier is reached
-  'tier.welcome.basic': "▬▬ι═══════ﺤ\n\nDie Jagd ist eröffnet, <b>Hunter</b>. 🎯 Jetzt {links} Links und alle {interval} s eine Prüfung — genug für die Marken, die Größen und die Preisspanne, die du ewig aufgeschoben hast.\nStell die Fallen 🪤 — den Rest übernehme ich.",
-  'tier.welcome.pro': "ᡕᠵデ气亠\n\nDu bist kampferprobt, <b>Ranger</b>, und liest das Feld auf einer anderen Ebene. ⚔️ Alle {interval} s eine Prüfung, {links} Links, Schub {burst} — Treffer kommen als Salve statt im Tröpfchen.\nDie anderen drücken noch F5. 😌",
-  'tier.welcome.turbo': "︻芫═───\n\nDu bist ein Elite-Scharfschütze — ein Ziel erkennen und holen liegt dir im Blut. 🥷 Willkommen auf der höchsten Stufe, <b>Sniper Elite</b>: {links} Links, Schub {burst}, alle {interval} s eine Prüfung.\nDas seltene Teil bekommt, wer es zuerst öffnet. Ab jetzt bist das du. 💎\nViel Spaß)",
-  'tier.welcome.elite_max': "▄︻デ══━一\n\nDiese Stufe stand nie auf der Preisliste, <b>Elite Max</b>. 🔒 Alle {interval} s, {links} Links, Schub {burst} — nichts Käufliches kommt da heran.\nSonst hat sie niemand. 🤫",
+  'tier.welcome.basic': "▬▬ι═══════ﺤ\n\nDie Jagd ist eröffnet, <b>Hunter</b> 🔪\nJetzt {links} Links und alle {every} eine Prüfung.\nStell die Fallen 🪤 — den Rest übernehme ich.",
+  'tier.welcome.pro': "ᡕᠵデ气亠\n\nKampferprobt, und du liest das Feld auf einer anderen Ebene, <b>Ranger</b> ⚔️\nJetzt {links} Links und alle {every} eine Prüfung, Schub {burst} — Treffer kommen als Salve statt im Tröpfchen.\nDie anderen drücken noch F5. 😌",
+  'tier.welcome.turbo': "︻芫═───\n\nDu bist <b>Sniper Elite</b> — ein Ziel erkennen und holen liegt dir im Blut. 🩸\nWillkommen im höchsten Rang 🥷\n<b>Sniper Elite</b>: {links} Links, Schub {burst}, alle {every} eine Prüfung.\n\nDas seltene Teil bekommt, wer es zuerst öffnet. Ab jetzt bist das du. 💎\nViel Spaß)",
+  'tier.welcome.elite_max': "▄︻デ══━一\n\nDiesen Rang gab es nie auf der Preisliste, <b>Elite Max</b> 🔒\n{links} Links, Schub {burst}, alle {every} eine Prüfung — nichts Käufliches kommt da heran.\nSonst hat ihn niemand. 🤫",
+
+  // how an interval reads to a person
+  'unit.sec': '{n} s',
+  'unit.min.one': '{n} Minute',
+  'unit.min.few': '{n} Minuten',
+  'unit.min.many': '{n} Minuten',
 };

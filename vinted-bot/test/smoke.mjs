@@ -20,7 +20,7 @@ const { Monitor } = await import('../src/monitor/scheduler.js');
 const { renderItem, itemKeyboard, demoItem, DEMO_SEARCH } = await import('../src/bot/format.js');
 const { helpText, helpParts } = await import('../src/bot/help.js');
 const cfg = await import('../src/config.js');
-const { LOCALES, allLabels, resolveLang, t } = await import('../src/i18n/index.js');
+const { LOCALES, allLabels, formatEvery, resolveLang, t } = await import('../src/i18n/index.js');
 const { STRATEGIES, extractItems, strategyByName, orderedStrategies, filtersLookHonoured } =
   await import('../src/vinted/endpoints.js');
 const { candidatesFor, endpointCache } = await import('../src/vinted/client.js');
@@ -488,17 +488,29 @@ test('each tier welcome opens with its own glyph on its own line', () => {
   assert.equal(glyphs.size, 4, 'every tier needs its own glyph, not a shared one');
 });
 
+test('a long interval is spoken in minutes, a short one in seconds', () => {
+  assert.equal(formatEvery('ru', 300), '5 минут');
+  assert.equal(formatEvery('en', 300), '5 minutes');
+  assert.equal(formatEvery('ru', 60), '60 с', 'a single minute still reads as seconds');
+  assert.equal(formatEvery('en', 30), '30s');
+  assert.equal(formatEvery('ru', 90), '90 с', 'a ragged interval is not rounded into minutes');
+  assert.equal(formatEvery('ru', 120), '2 минуты', 'Russian picks the 2-4 form');
+  assert.equal(formatEvery('uk', 900), '15 хвилин');
+  // the tier every user starts paying for is the one that must not say "300"
+  assert.equal(formatEvery('ru', cfg.intervalFor('basic')), '5 минут');
+});
+
 test('the welcome speaks in numbers the config really holds', () => {
   for (const lang of Object.keys(LOCALES)) {
     for (const tier of ['basic', 'pro', 'turbo', 'elite_max']) {
       const text = t(lang, `tier.welcome.${tier}`, {
         links: cfg.searchLimitFor(tier),
-        interval: cfg.intervalFor(tier),
+        every: formatEvery(lang, cfg.intervalFor(tier)),
         burst: cfg.burstFor(tier),
       });
       assert.ok(!/\{\w+\}/.test(text), `${lang}/${tier}: an unfilled placeholder would reach a paying user`);
       assert.ok(text.includes(String(cfg.searchLimitFor(tier))), `${lang}/${tier}: link count missing`);
-      assert.ok(text.includes(String(cfg.intervalFor(tier))), `${lang}/${tier}: interval missing`);
+      assert.ok(text.includes(formatEvery(lang, cfg.intervalFor(tier))), `${lang}/${tier}: interval missing`);
       // it may travel as a photo caption, which stops at 1024
       assert.ok(text.length <= 1024, `${lang}/${tier}: too long for a caption (${text.length})`);
       for (const tag of new Set([...text.matchAll(/<\/?([a-z]+)/g)].map((m) => m[1]))) {
