@@ -51,6 +51,14 @@ export const config = {
   startImage: process.env.START_IMAGE || '',
   helpImage: process.env.HELP_IMAGE || '',
 
+  // one picture per tier, named after what users see rather than the key
+  tierImages: {
+    basic: process.env.TIER_IMAGE_HUNTER || '',
+    pro: process.env.TIER_IMAGE_RANGER || '',
+    turbo: process.env.TIER_IMAGE_SNIPER || '',
+    elite_max: process.env.TIER_IMAGE_ELITE_MAX || '',
+  },
+
   // Delivery pacing. `telegram` holds what Telegram itself allows — the ceiling
   // nobody may be sold past. `delivery` holds what each plan is allowed to
   // spend of it: how many messages may leave back to back, and (optionally) a

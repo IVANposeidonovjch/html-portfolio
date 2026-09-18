@@ -205,4 +205,18 @@ Beispiel:
   'fomo.note': '⏱ Diese Anzeige war {seconds} s online, bevor du sie gesehen hast. <b>Sniper Elite</b> sieht so etwas sofort.',
   'kb.changeDest': '📍 Ziel',
   'search.destChanged': '✅ „{name}“ geht jetzt an {dest}.',
+
+  // what the next tier up actually buys
+  'plan.next.header': '⬆️ <b>{next}</b> im Vergleich zu deinem {current}:',
+  'plan.next.speed': '• prüft {times}× so oft',
+  'plan.next.links': '• {times}× so viele Links',
+  'plan.next.burst': '• {times}× so großer Zustellschub',
+  'plan.next.price': '• nur +${delta} im Monat',
+  'plan.next.same': '• dasselbe, aber {links} Links statt {currentLinks}',
+
+  // what arrives when a tier is reached
+  'tier.welcome.basic': "🎯 <b>Hunter</b> freigeschaltet.\nJetzt {links} Links und alle {interval} s eine Prüfung. Platz für die Marken, die Größen und die Preisspanne, die du immer noch eintragen wolltest.",
+  'tier.welcome.pro': "🏹 <b>Ranger</b>.\nAlle {interval} s eine Prüfung, {links} Links, Schub {burst}. Treffer kommen im Paket statt im Tröpfchen. Das ist kein Hobby mehr.",
+  'tier.welcome.turbo': "🥷 <b>Sniper Elite</b>.\n{links} Links, Schub {burst} — das seltene Teil bekommt, wer es zuerst öffnet. Ab jetzt bist das du.\nEs gibt wenige Plätze auf dieser Stufe. Einer gehört dir.",
+  'tier.welcome.elite_max': "🔒 <b>Elite Max</b>.\nAlle {interval} s, {links} Links, Schub {burst}. Diese Stufe ist nicht käuflich.",
 };

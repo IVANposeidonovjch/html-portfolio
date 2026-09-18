@@ -205,4 +205,18 @@ export const uk = {
   'fomo.note': '⏱ Це оголошення висіло {seconds} с до того, як ти його побачив. <b>Sniper Elite</b> бачить такі миттєво.',
   'kb.changeDest': '📍 Куди слати',
   'search.destChanged': '✅ Тепер «{name}» іде в {dest}.',
+
+  // what the next tier up actually buys
+  'plan.next.header': '⬆️ <b>{next}</b> порівняно з твоїм {current}:',
+  'plan.next.speed': '• перевірка у {times}× частіше',
+  'plan.next.links': '• посилань у {times}× більше',
+  'plan.next.burst': '• сплеск доставки у {times}× більший',
+  'plan.next.price': '• усього +${delta} на місяць',
+  'plan.next.same': '• те саме, але {links} посилань замість {currentLinks}',
+
+  // what arrives when a tier is reached
+  'tier.welcome.basic': "🎯 <b>Hunter</b> — рівень узято.\nТепер {links} посилань і перевірка кожні {interval} с. Вистачить місця і на бренди, і на розміри, і на ту цінову вилку, яку ти все відкладав.",
+  'tier.welcome.pro': "🏹 <b>Ranger</b>.\nПеревірка кожні {interval} с, {links} посилань, сплеск {burst}. Знахідки прилітають пачкою, а не по одній із паузами. Це вже не хобі.",
+  'tier.welcome.turbo': "🥷 <b>Sniper Elite</b>.\n{links} посилань, сплеск {burst} — рідкісна річ дістається тому, хто відкрив її першим. Тепер це ти.\nМісць на цьому рівні небагато, і одне з них твоє.",
+  'tier.welcome.elite_max': "🔒 <b>Elite Max</b>.\nПеревірка раз на {interval} с, {links} посилань, сплеск {burst}. Цей рівень не продається.",
 };

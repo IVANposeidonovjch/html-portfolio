@@ -46,6 +46,46 @@ async function replyLines(ctx, lines, limit = 3500) {
     await ctx.reply(buffer, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
   }
 }
+/**
+ * Ratios for the comparison, computed from the live numbers rather than written
+ * into the copy — so the sentence stays true when a tier is retuned. A ratio of
+ * one is not worth a line, which is why each clause is added only if it differs.
+ */
+const times = (ratio) => (Number.isInteger(ratio) ? String(ratio) : ratio.toFixed(1));
+
+function nextTierPitch(lang, plan) {
+  const at = PUBLIC_PLANS.indexOf(plan);
+  // a reserved tier is not on the ladder at all; indexOf gives -1 there, and
+  // -1 + 1 would have offered its holder an "upgrade" to the cheapest plan
+  if (at === -1) return [];
+  const next = PUBLIC_PLANS[at + 1];
+  if (!next) return []; // already at the top of what is sold
+
+  const lines = [
+    '',
+    t(lang, 'plan.next.header', { next: planName(lang, next), current: planName(lang, plan) }),
+  ];
+  const speed = intervalFor(plan) / intervalFor(next);
+  const links = searchLimitFor(next) / searchLimitFor(plan);
+  const burst = burstFor(next) / burstFor(plan);
+  const delta = usdFor(next) - usdFor(plan);
+
+  if (speed > 1) lines.push(t(lang, 'plan.next.speed', { times: times(speed) }));
+  if (links > 1) lines.push(t(lang, 'plan.next.links', { times: times(links) }));
+  if (burst > 1) lines.push(t(lang, 'plan.next.burst', { times: times(burst) }));
+  if (lines.length === 2) {
+    // nothing measurable differs; say what does rather than an empty promise
+    lines.push(
+      t(lang, 'plan.next.same', {
+        links: searchLimitFor(next),
+        currentLinks: searchLimitFor(plan),
+      }),
+    );
+  }
+  if (delta > 0) lines.push(t(lang, 'plan.next.price', { delta }));
+  return lines;
+}
+
 /** Plan names are product copy, so they live in the locales like everything else. */
 const planName = (lang, plan) => t(lang, `plan.name.${plan}`);
 const priceTag = (plan) => (usdFor(plan) ? `$${usdFor(plan)}` : '$0');
@@ -74,19 +114,29 @@ async function safeEdit(ctx, text, options) {
   } catch (err) {
     if (!(err instanceof GrammyError)) throw err;
     if (/message is not modified/i.test(err.description)) return;
-    // /start can be a photo with the menu in its caption; a photo has no text
-    // to edit, so the same navigation has to rewrite the caption instead.
-    if (/no text in the message to edit/i.test(err.description)) {
-      await ctx.editMessageCaption({ caption: text, ...options });
-      return;
-    }
     throw err;
   }
 }
 
-/** Reply to a command, or edit the menu message a button was pressed on. */
-const render = (ctx, text, options) =>
-  ctx.callbackQuery ? safeEdit(ctx, text, options) : ctx.reply(text, options);
+/**
+ * Reply to a command, or edit the message a button was pressed on.
+ *
+ * The welcome may be a photo with the menu in its caption, and a photo has no
+ * text to edit — rewriting its caption instead turned the picture into a
+ * backdrop for every later screen, so "Send a Vinted URL" appeared under a
+ * marketing image. The picture belongs to the welcome alone: when a button on
+ * it is pressed, its buttons are retired and the next screen arrives as its own
+ * text message, which all further navigation then edits in place as usual.
+ */
+const render = async (ctx, text, options) => {
+  const pressedOn = ctx.callbackQuery?.message;
+  if (!pressedOn) return ctx.reply(text, options);
+  if (pressedOn.photo) {
+    await ctx.editMessageReplyMarkup().catch(() => {});
+    return ctx.reply(text, options);
+  }
+  return safeEdit(ctx, text, options);
+};
 
 function topicsByChat(chats) {
   const map = new Map();
@@ -626,6 +676,33 @@ export function createBot() {
   bot.chatType('private').command('pause', (ctx) => toggleMonitoring(ctx, 0));
   bot.chatType('private').command('resume', (ctx) => toggleMonitoring(ctx, 1));
 
+  /**
+   * Reaching a tier is the one moment a user is definitely paying attention, so
+   * it gets its own message: copy written for that tier, carrying the numbers it
+   * actually bought, and its own picture when one is set.
+   */
+  async function announceTier(userId, plan) {
+    if (plan === 'free') return;
+    const target = store.getUser(userId);
+    const lang = target?.lang || 'en';
+    const text = t(lang, `tier.welcome.${plan}`, {
+      links: searchLimitFor(plan),
+      interval: intervalFor(plan),
+      burst: burstFor(plan),
+    });
+    const picture = imageFor(`tier_${plan}`);
+    try {
+      if (picture) {
+        await bot.api.sendPhoto(userId, picture, { caption: text, parse_mode: 'HTML' });
+      } else {
+        await bot.api.sendMessage(userId, text, { parse_mode: 'HTML' });
+      }
+    } catch (err) {
+      // a congratulation must never cost someone the plan they just paid for
+      logger.warn(`tier welcome not sent to ${userId}: ${err.description || err.message}`);
+    }
+  }
+
   /* -------------------------------- plan --------------------------------- */
 
   const showPlan = async (ctx) => {
@@ -662,6 +739,7 @@ export function createBot() {
           }),
       );
     }
+    lines.push(...nextTierPitch(lang, plan));
     lines.push('', t(lang, 'plan.scarcity'));
     if (addon.stars) {
       lines.push(t(lang, 'plan.addonOffer', { links: addon.links, price: `$${addon.usd}` }));
@@ -742,8 +820,11 @@ export function createBot() {
 
     if (kind !== 'plan' || !SELLABLE_PLANS.includes(what)) return;
     const base = Math.max(store.now(), user.plan_until || 0);
+    const upgrade = store.effectivePlan(user) !== what;
     store.setPlan.run(what, base + config.payments.planDays * 86400, user.tg_id);
     await ctx.reply(t(lang, 'pay.ok', { plan: planName(lang, what), days: config.payments.planDays }));
+    // an extension of the same plan is not a new tier to celebrate
+    if (upgrade) await announceTier(user.tg_id, what);
   });
 
   /* -------------------------------- admin -------------------------------- */
@@ -756,9 +837,11 @@ export function createBot() {
     }
     store.upsertUser(Number(id), null);
     const until = plan === 'free' ? null : store.now() + (Number(days) || 30) * 86400;
+    const before = store.effectivePlan(store.getUser(Number(id)));
     store.setPlan.run(plan, until, Number(id));
     // a hand-assigned plan starts clean: bought links belonged to the old one
     store.resetExtraLinks.run(Number(id));
+    if (before !== plan) await announceTier(Number(id), plan);
     await ctx.reply(`OK: ${id} → ${plan}${until ? ` until ${new Date(until * 1000).toISOString().slice(0, 10)}` : ''}`);
   });
 
@@ -839,7 +922,9 @@ export function createBot() {
   const imageCommand = (kind, command) => async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     const { lang } = who(ctx);
-    const what = t(lang, `image.what.${kind}`);
+    const what = kind.startsWith('tier_')
+      ? planName(lang, kind.slice('tier_'.length))
+      : t(lang, `image.what.${kind}`);
     const arg = (ctx.match || '').trim().toLowerCase();
 
     if (['clear', 'off', 'remove', 'убрать'].includes(arg)) {
@@ -855,7 +940,9 @@ export function createBot() {
   };
 
   async function acceptPhoto(ctx, lang, kind, sizes) {
-    const what = t(lang, `image.what.${kind}`);
+    const what = kind.startsWith('tier_')
+      ? planName(lang, kind.slice('tier_'.length))
+      : t(lang, `image.what.${kind}`);
     const largest = sizes[sizes.length - 1]; // Telegram sorts them smallest first
     // One command captures exactly one photo, successful or not: leaving the
     // listener armed after a failure would quietly eat the next unrelated photo.
@@ -866,7 +953,7 @@ export function createBot() {
         t(lang, 'image.saved', {
           what,
           kb: Math.max(1, Math.round(bytes / 1024)),
-          check: kind === 'start' ? '/start' : '/help',
+          check: kind === 'start' ? '/start' : kind === 'help' ? '/help' : '/plan',
         }),
       );
     } catch (err) {
@@ -874,6 +961,33 @@ export function createBot() {
       await ctx.reply(t(lang, 'image.failed', { error: err.message }));
     }
   }
+
+  /** Friendly names for the tiers, so the command reads the way the tier does. */
+  const TIER_ALIASES = {
+    hunter: 'basic', basic: 'basic',
+    ranger: 'pro', pro: 'pro',
+    sniper: 'turbo', 'sniper_elite': 'turbo', turbo: 'turbo',
+    elite_max: 'elite_max', max: 'elite_max',
+  };
+
+  bot.chatType('private').command('settierimage', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    const { lang } = who(ctx);
+    const [nameArg, ...rest] = (ctx.match || '').trim().toLowerCase().split(/\s+/);
+    const plan = TIER_ALIASES[nameArg];
+    if (!plan) {
+      return ctx.reply(`Usage: /settierimage <${Object.keys(TIER_ALIASES).join('|')}> [clear]`);
+    }
+    // from here it behaves exactly like the other picture commands
+    return imageCommand(`tier_${plan}`, `/settierimage ${nameArg}`)({
+      ...ctx,
+      match: rest.join(' '),
+      msg: ctx.msg,
+      from: ctx.from,
+      reply: (...args) => ctx.reply(...args),
+      api: ctx.api,
+    });
+  });
 
   bot.chatType('private').command('setstartimage', imageCommand('start', '/setstartimage'));
   bot.chatType('private').command('sethelpimage', imageCommand('help', '/sethelpimage'));

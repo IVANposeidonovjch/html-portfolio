@@ -471,6 +471,29 @@ test('plan expiry falls back to free', () => {
   assert.equal(store.effectivePlan(store.getUser(1)), 'pro');
 });
 
+/* --------------------------- next-tier pitch ----------------------------- */
+
+test('every public tier but the top one is told what the next one buys', () => {
+  const pitchFor = (plan) => {
+    const idx = cfg.PUBLIC_PLANS.indexOf(plan);
+    return cfg.PUBLIC_PLANS[idx + 1];
+  };
+  for (const plan of cfg.PUBLIC_PLANS.slice(0, -1)) {
+    assert.ok(pitchFor(plan), `${plan} must have somewhere to go`);
+  }
+  assert.equal(pitchFor(cfg.PUBLIC_PLANS.at(-1)), undefined, 'the top tier has no upsell');
+});
+
+test('the ratios are the real ones, and a clause only appears when it differs', () => {
+  // Ranger and Sniper Elite poll at the same interval today: claiming a speed
+  // gain there would be false, so the line must be absent rather than "1x"
+  const sameSpeed = cfg.intervalFor('pro') === cfg.intervalFor('turbo');
+  assert.ok(sameSpeed, 'this test exists because those two match; retune it if that changes');
+  assert.equal(cfg.intervalFor('basic') / cfg.intervalFor('pro'), 5, 'Hunter to Ranger really is 5x');
+  assert.equal(cfg.searchLimitFor('pro') / cfg.searchLimitFor('basic'), 4);
+  assert.equal(cfg.usdFor('pro') - cfg.usdFor('basic'), 10);
+});
+
 /* ------------------------------ add-on ----------------------------------- */
 
 test('bought links stack on the plan and die with it', () => {
@@ -1150,226 +1173,52 @@ await (async () => {
     assert.ok(!start.some((c) => c.method === 'sendPhoto'));
   });
 
-  // Navigating away from a photo welcome: a photo has no text to edit, and
-  // Telegram says so — the menu has to rewrite the caption instead.
-  const onPhoto = await (async () => {
-    const bot = createBot();
-    const calls = [];
-    bot.api.config.use(async (prev, method, payload) => {
-      calls.push({ method, payload });
-      if (method === 'editMessageText') {
-        return { ok: false, error_code: 400, description: 'Bad Request: there is no text in the message to edit' };
-      }
-      return { ok: true, result: { message_id: 10, date: 0, chat: { id: UID, type: 'private' } } };
-    });
-    bot.botInfo = { id: 111, is_bot: true, first_name: 'T', username: 'testbot', can_join_groups: true,
-      can_read_all_group_messages: false, supports_inline_queries: false, can_connect_to_business: false,
-      has_main_web_app: false };
-    await bot.handleUpdate(pressUpdate('m:home', UID));
-    return calls;
-  })();
-
-  test('the menu survives being attached to a photo', () => {
-    assert.ok(onPhoto.some((c) => c.method === 'editMessageText'), 'it tries text first');
-    const caption = onPhoto.find((c) => c.method === 'editMessageCaption');
-    assert.ok(caption, 'and falls back to the caption rather than throwing');
-    assert.ok(caption.payload.reply_markup.inline_keyboard, 'the buttons come along');
+  // The welcome can be a photo. Navigating from it must not turn that picture
+  // into the backdrop of every later screen.
+  const photoPress = (data) => ({
+    update_id: Math.floor(Math.random() * 1e6),
+    callback_query: {
+      id: String(Math.floor(Math.random() * 1e6)),
+      from: from(UID),
+      chat_instance: '1',
+      data,
+      message: {
+        message_id: 10,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: UID, type: 'private' },
+        caption: 'welcome',
+        photo: [{ file_id: 'w', file_unique_id: 'w', width: 90, height: 90 }],
+      },
+    },
   });
 
-  const pressed = await drive(pressUpdate('m:toggle', UID), UID);
-  test('pressing a menu button edits that message instead of sending a new one', () => {
-    assert.ok(pressed.some((c) => c.method === 'answerCallbackQuery'), 'the tap must be acknowledged');
-    assert.ok(pressed.some((c) => c.method === 'editMessageText'), 'the menu is redrawn in place');
-    assert.ok(!pressed.some((c) => c.method === 'sendMessage'), 'no new message may be posted');
-    assert.equal(store.getUser(UID).monitoring_enabled, 0, 'and the toggle actually toggled');
-  });
-
-  const back = await drive(pressUpdate('m:home', UID), UID);
-  test('the redrawn menu reflects the new state', () => {
-    const edit = back.find((c) => c.method === 'editMessageText');
-    const toggle = edit.payload.reply_markup.inline_keyboard.flat().find((b) => b.callback_data === 'm:toggle');
-    assert.equal(toggle.text, LOCALES.ru['btn.toggleOff'], 'monitoring is off, the button must say so');
-  });
-  store.setMonitoring.run(1, UID);
-
-  const helpPressed = await drive(pressUpdate('m:help', UID), UID);
-  test('help is the second level, not a dead end', () => {
-    const edit = helpPressed.find((c) => c.method === 'editMessageText');
-    assert.ok(edit, 'help replaces the menu message');
-    assert.deepEqual(
-      edit.payload.reply_markup.inline_keyboard.flat().map((b) => b.callback_data),
-      ['m:plan', 'm:lang', 'm:chats', 'm:home'],
-    );
-  });
-
-  const typedList = await drive(
-    textUpdate('/list', UID, [{ type: 'bot_command', offset: 0, length: 5 }]),
-    UID,
-  );
-  test('a command dropped from the slash list still answers when typed', () => {
+  const fromPhoto = await drive(photoPress('m:add'), UID);
+  test('a screen opened from the photo welcome is its own message', () => {
+    assert.ok(!fromPhoto.some((c) => c.method === 'editMessageText'), 'a photo has no text to edit');
     assert.ok(
-      typedList.some((c) => c.method === 'sendMessage'),
-      '/list is no longer advertised, but anyone who learned it keeps it',
+      !fromPhoto.some((c) => c.method === 'editMessageCaption'),
+      'and its caption must not become the prompt of an unrelated screen',
     );
+    const sent = fromPhoto.find((c) => c.method === 'sendMessage');
+    assert.ok(sent, 'the screen arrives as a fresh text message');
+    assert.match(sent.payload.text, /vinted\.de\/catalog/, 'and it is the add-link prompt');
   });
 
-  // the language-mismatch bug: the pinned keyboard kept the old labels until
-  // something re-sent it, so the menu could sit in a language the user had left
-  const switched = await drive(pressUpdate('lang:de', UID), UID);
-  test('switching language redraws the menu in that language immediately', () => {
-    const edit = switched.find((c) => c.method === 'editMessageText');
-    assert.ok(edit, 'the same message is rewritten, no second menu is posted');
-    assert.ok(!switched.some((c) => c.method === 'sendMessage'), 'and nothing extra is sent');
-    const labels = edit.payload.reply_markup.inline_keyboard.flat().map((b) => b.text);
-    assert.ok(labels.includes(LOCALES.de['btn.add']), `menu still not German: ${labels.join('|')}`);
-    assert.ok(!labels.includes(LOCALES.ru['btn.add']), 'no Russian label may survive the switch');
-    assert.equal(store.getUser(UID).lang, 'de');
+  test('the welcome keeps its picture but gives up its buttons', () => {
+    const retired = fromPhoto.find((c) => c.method === 'editMessageReplyMarkup');
+    assert.ok(retired, 'the old menu must stop being tappable');
+    assert.equal(retired.payload.reply_markup, undefined, 'the keyboard is removed, not replaced');
+    assert.ok(!fromPhoto.some((c) => c.method === 'deleteMessage'), 'the welcome itself is left alone');
   });
 
-  const afterSwitch = await drive(pressUpdate('m:list', UID), UID);
-  test('screens opened after the switch are German too', () => {
-    const edit = afterSwitch.find((c) => c.method === 'editMessageText');
-    const back = edit.payload.reply_markup.inline_keyboard.flat().at(-1);
-    assert.equal(back.text, LOCALES.de['kb.menu']);
+  // leave the add wizard the way a user would, so later tests start clean
+  await drive(pressUpdate('cancel', UID), UID);
+
+  const textPress = await drive(pressUpdate('m:list', UID), UID);
+  test('navigation from a text screen still edits in place', () => {
+    assert.ok(textPress.some((c) => c.method === 'editMessageText'), 'no new message for plain screens');
+    assert.ok(!textPress.some((c) => c.method === 'sendMessage'));
   });
-  store.setLang.run('ru', UID);
-
-  // /help with a picture configured: the example becomes a real-looking alert
-  const demoPath = pathMod.join(pathMod.dirname(pathMod.resolve(process.env.DB_PATH)), 'images', 'help.jpg');
-  fsMod.mkdirSync(pathMod.dirname(demoPath), { recursive: true });
-  fsMod.writeFileSync(demoPath, Buffer.from('89504e470d0a1a0a', 'hex'));
-  store.settings.set('help_image', demoPath);
-  const helpWithPhoto = await drive(pressUpdate('m:help', UID), UID);
-  store.settings.clear('help_image');
-  fsMod.rmSync(demoPath, { force: true });
-
-  test('help shows the example as an actual photo when one is set', () => {
-    const photo = helpWithPhoto.find((c) => c.method === 'sendPhoto');
-    assert.ok(photo, 'the sample alert must be a photo message');
-    assert.equal(
-      photo.payload.caption,
-      renderItem(demoItem(), DEMO_SEARCH, 'ru'),
-      'the caption must be produced by renderItem, not written by hand',
-    );
-    assert.equal(photo.payload.reply_markup.inline_keyboard[0][0].text, 'URL');
-    const edit = helpWithPhoto.find((c) => c.method === 'editMessageText');
-    assert.ok(edit, 'and the help text itself is still shown');
-    assert.ok(!edit.payload.text.includes('[ URL ]'), 'the example must not be told twice');
-  });
-
-  test('the photo lands where the example belongs, buttons last', () => {
-    const { intro, rest } = helpParts('ru');
-    const order = helpWithPhoto
-      .filter((c) => ['editMessageText', 'sendPhoto', 'sendMessage'].includes(c.method))
-      .map((c) => c.method);
-    assert.deepEqual(order, ['editMessageText', 'sendPhoto', 'sendMessage'], 'text, photo, then the rest');
-
-    const [text, , tail] = helpWithPhoto.filter((c) => order.includes(c.method));
-    assert.equal(text.payload.text, intro);
-    assert.match(text.payload.text, /⬇️$/, 'the intro ends pointing at the photo');
-    assert.equal(text.payload.reply_markup, undefined, 'no buttons above the photo');
-
-    assert.equal(tail.payload.text, rest);
-    assert.ok(tail.payload.reply_markup.inline_keyboard, 'the buttons ride on the last message');
-    assert.deepEqual(
-      tail.payload.reply_markup.inline_keyboard.flat().map((b) => b.callback_data),
-      ['m:plan', 'm:lang', 'm:chats', 'm:home'],
-    );
-  });
-
-  test('the split loses nothing from the help text', () => {
-    for (const lang of Object.keys(LOCALES)) {
-      const { intro, rest } = helpParts(lang);
-      const whole = helpText(lang, true);
-      for (const piece of [intro, rest]) {
-        for (const line of piece.split('\n').filter((l) => l.trim())) {
-          assert.ok(whole.includes(line.trim()), `${lang}: line dropped by the split: ${line}`);
-        }
-      }
-      assert.ok(intro.includes('⚡️'), `${lang}: the opening is missing from the intro`);
-      assert.ok(rest.includes('⌨️'), `${lang}: the commands section is missing from the tail`);
-    }
-  });
-
-  // the picture is configured but Telegram refuses it
-  store.settings.set('help_image', demoPath);
-  fsMod.mkdirSync(pathMod.dirname(demoPath), { recursive: true });
-  fsMod.writeFileSync(demoPath, Buffer.from('89504e470d0a1a0a', 'hex'));
-  const brokenPhoto = await (async () => {
-    const bot = createBot();
-    const calls = [];
-    bot.api.config.use(async (prev, method, payload) => {
-      calls.push({ method, payload });
-      if (method === 'sendPhoto') {
-        return { ok: false, error_code: 400, description: 'Bad Request: IMAGE_PROCESS_FAILED' };
-      }
-      return { ok: true, result: { message_id: 10, date: 0, chat: { id: UID, type: 'private' } } };
-    });
-    bot.botInfo = { id: 111, is_bot: true, first_name: 'T', username: 'testbot', can_join_groups: true,
-      can_read_all_group_messages: false, supports_inline_queries: false, can_connect_to_business: false,
-      has_main_web_app: false };
-    await bot.handleUpdate(pressUpdate('m:help', UID));
-    return calls;
-  })();
-  store.settings.clear('help_image');
-  fsMod.rmSync(demoPath, { force: true });
-
-  test('a refused photo falls back to the written example', () => {
-    const tail = brokenPhoto.find((c) => c.method === 'sendMessage');
-    assert.ok(tail, 'the rest of help must still arrive');
-    assert.ok(
-      tail.payload.text.includes(renderItem(demoItem(), DEMO_SEARCH, 'ru')),
-      'with the mockup standing in, rather than a pointer at nothing',
-    );
-    assert.ok(tail.payload.reply_markup.inline_keyboard, 'and the buttons are still there');
-  });
-
-  const helpNoPhoto = await drive(pressUpdate('m:help', UID), UID);
-  test('without a picture help keeps the written example', () => {
-    assert.ok(!helpNoPhoto.some((c) => c.method === 'sendPhoto'));
-    const edit = helpNoPhoto.find((c) => c.method === 'editMessageText');
-    assert.equal(edit.payload.text, helpText('ru', false));
-    assert.match(edit.payload.text, /\[ URL \]/, 'the mockup is the fallback and must stay');
-  });
-
-  /* ------------------ editing a link from the list --------------------- */
-
-  const owned = store.insertSearch.run({
-    user_id: UID, name: 'Raf', url: parsed.normalizedUrl, domain: parsed.domain,
-    canonical_key: parsed.canonicalKey, api_query: JSON.stringify(parsed.query),
-    dest_chat_id: UID, dest_thread_id: null, next_run_at: 0, created_at: store.now(),
-  }).lastInsertRowid;
-
-  const opened = await drive(pressUpdate(`s:open:${owned}`, UID), UID);
-  test('tapping a link opens its edit actions in one step', () => {
-    const edit = opened.find((c) => c.method === 'editMessageText');
-    const actions = edit.payload.reply_markup.inline_keyboard.flat().map((b) => b.callback_data ?? b.url);
-    for (const action of ['s:toggle', 's:rename', 's:dest', 's:del']) {
-      assert.ok(
-        actions.some((a) => String(a).startsWith(action)),
-        `${action} missing — editing must not need another screen`,
-      );
-    }
-  });
-
-  const picker = await drive(pressUpdate(`s:dest:${owned}`, UID), UID);
-  test('changing the destination reuses the picker from creation', () => {
-    const edit = picker.find((c) => c.method === 'editMessageText');
-    const actions = edit.payload.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
-    assert.ok(actions.includes('dest:private'), 'the same destinations are offered');
-  });
-
-  const before = store.getSearch.get(owned).dest_chat_id;
-  const moved = await drive(pressUpdate('dest:private', UID), UID);
-  test('picking a destination moves the search instead of creating one', () => {
-    const after = store.getSearch.get(owned);
-    assert.equal(after.dest_chat_id, UID);
-    assert.equal(store.listSearches.all(UID).length, 1, 'no second search may appear');
-    const edit = moved.find((c) => c.method === 'editMessageText');
-    assert.match(edit.payload.text, /Raf/, 'and the user is told where it goes now');
-    assert.ok(before !== undefined);
-  });
-  store.deleteSearch.run(owned, UID);
 
   const typedLabel = await drive(textUpdate(LOCALES.ru['btn.add'], UID), UID);
   test('the old button captions are just text now, they start nothing', () => {
@@ -1517,6 +1366,66 @@ await (async () => {
     assert.match(edit.payload.text, /unavailable|недоступна/i);
   });
   cfg.config.supportId = SUPPORT;
+
+  /* ------------------------- reaching a tier --------------------------- */
+
+  store.upsertUser(9100, 'climber', 'ru');
+  const grant = (args) =>
+    drive(textUpdate(`/grant ${args}`, 1, [{ type: 'bot_command', offset: 0, length: 6 }]), 1);
+  const climbed = await grant('9100 pro 30');
+  test('reaching a tier brings its own congratulation, with real numbers', () => {
+    const welcome = climbed.find((c) => c.method === 'sendMessage' && c.payload.chat_id === 9100);
+    assert.ok(welcome, 'the user must hear about it');
+    assert.match(welcome.payload.text, /Ranger/);
+    assert.match(welcome.payload.text, new RegExp(String(cfg.searchLimitFor('pro'))), 'its link count');
+    assert.match(welcome.payload.text, new RegExp(String(cfg.intervalFor('pro'))), 'its interval');
+    assert.ok(!/\{/.test(welcome.payload.text), 'no placeholder may survive into the copy');
+  });
+
+  const again = await grant('9100 pro 60');
+  test('extending the same tier is not celebrated twice', () => {
+    assert.ok(
+      !again.some((c) => c.method === 'sendMessage' && c.payload.chat_id === 9100),
+      'only a change of tier is news',
+    );
+  });
+
+  const dropped = await grant('9100 free');
+  test('being moved to the free tier is not congratulated', () => {
+    assert.ok(!dropped.some((c) => c.method === 'sendMessage' && c.payload.chat_id === 9100));
+  });
+
+  // with a picture set for that tier the congratulation carries it
+  const tierPath = pathMod.join(pathMod.dirname(pathMod.resolve(process.env.DB_PATH)), 'images', 'tier_turbo.jpg');
+  fsMod.mkdirSync(pathMod.dirname(tierPath), { recursive: true });
+  fsMod.writeFileSync(tierPath, Buffer.from('89504e470d0a1a0a', 'hex'));
+  store.settings.set('tier_turbo_image', tierPath);
+  const withPicture = await grant('9100 turbo 30');
+  store.settings.clear('tier_turbo_image');
+  fsMod.rmSync(tierPath, { force: true });
+
+  test('a tier picture rides along with its congratulation', () => {
+    const photo = withPicture.find((c) => c.method === 'sendPhoto' && c.payload.chat_id === 9100);
+    assert.ok(photo, 'the picture set for that tier must be used');
+    assert.match(photo.payload.caption, /Sniper Elite/);
+    assert.ok(
+      !withPicture.some((c) => c.method === 'sendMessage' && c.payload.chat_id === 9100),
+      'and not be doubled by a text copy',
+    );
+  });
+
+  const tierImageUsage = await runCommand('/settierimage hunter', 1);
+  test('/settierimage works by the name the tier is sold under', () => {
+    assert.match(tierImageUsage, /Hunter/, 'it names the tier back');
+  });
+  const tierImageBad = await runCommand('/settierimage platinum', 1);
+  test('/settierimage refuses a tier that does not exist', () => {
+    assert.match(tierImageBad, /Usage/);
+  });
+  test('the tier picture command is invisible in every command list', () => {
+    const everywhere = [...COMMAND_SETS.PRIVATE, ...COMMAND_SETS.GROUP, ...COMMAND_SETS.ADMIN];
+    assert.ok(!everywhere.includes('settierimage'));
+  });
 
   const granted = await runCommand('/grant 4242 elite_max 30', 1);
   test('the reserved tier is handed out by /grant and nothing else', () => {

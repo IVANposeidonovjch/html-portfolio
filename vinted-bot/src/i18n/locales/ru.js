@@ -205,4 +205,18 @@ export const ru = {
   'fomo.note': '⏱ Это объявление висело {seconds} с до того, как ты его увидел. <b>Sniper Elite</b> видит такие мгновенно.',
   'kb.changeDest': '📍 Куда слать',
   'search.destChanged': '✅ Теперь «{name}» уходит в {dest}.',
+
+  // what the next tier up actually buys
+  'plan.next.header': '⬆️ <b>{next}</b> по сравнению с твоим {current}:',
+  'plan.next.speed': '• проверка в {times}× чаще',
+  'plan.next.links': '• ссылок в {times}× больше',
+  'plan.next.burst': '• всплеск доставки в {times}× больше',
+  'plan.next.price': '• всего +${delta} в месяц',
+  'plan.next.same': '• то же самое, но {links} ссылок вместо {currentLinks}',
+
+  // what arrives when a tier is reached
+  'tier.welcome.basic': "🎯 <b>Hunter</b> — уровень взят.\nТеперь {links} ссылок и проверка каждые {interval} с. Хватит места и на бренды, и на размеры, и на ту ценовую вилку, которую ты всё откладывал.",
+  'tier.welcome.pro': "🏹 <b>Ranger</b>.\nПроверка каждые {interval} с, {links} ссылок, всплеск {burst}. Находки прилетают пачкой, а не по одной с паузами. Это уже не хобби.",
+  'tier.welcome.turbo': "🥷 <b>Sniper Elite</b>.\n{links} ссылок, всплеск {burst} — редкая вещь достаётся тому, кто открыл её первым. Теперь это ты.\nМест на этом уровне немного, и одно из них твоё.",
+  'tier.welcome.elite_max': "🔒 <b>Elite Max</b>.\nПроверка раз в {interval} с, {links} ссылок, всплеск {burst}. Этот уровень не продаётся.",
 };

@@ -205,4 +205,18 @@ Example:
   'fomo.note': '⏱ This listing was live {seconds}s before you saw it. <b>Sniper Elite</b> sees these instantly.',
   'kb.changeDest': '📍 Destination',
   'search.destChanged': '✅ "{name}" now goes to {dest}.',
+
+  // what the next tier up actually buys
+  'plan.next.header': '⬆️ <b>{next}</b> next to your {current}:',
+  'plan.next.speed': '• checks {times}× more often',
+  'plan.next.links': '• {times}× the links',
+  'plan.next.burst': '• {times}× the delivery burst',
+  'plan.next.price': '• just +${delta} a month',
+  'plan.next.same': '• the same, with {links} links instead of {currentLinks}',
+
+  // what arrives when a tier is reached
+  'tier.welcome.basic': "🎯 <b>Hunter</b> unlocked.\n{links} links now, and a check every {interval}s. Room for the brands, the sizes and that price bracket you kept meaning to add.",
+  'tier.welcome.pro': "🏹 <b>Ranger</b>.\nA check every {interval}s, {links} links, burst {burst}. Finds land in a batch instead of trickling in. This stopped being a hobby.",
+  'tier.welcome.turbo': "🥷 <b>Sniper Elite</b>.\n{links} links, burst {burst} — the rare piece goes to whoever opened it first, and that is now you.\nThere are not many seats at this level. One of them is yours.",
+  'tier.welcome.elite_max': "🔒 <b>Elite Max</b>.\nEvery {interval}s, {links} links, burst {burst}. This one is not for sale.",
 };

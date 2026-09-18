@@ -17,11 +17,27 @@ import { logger } from '../util/logger.js';
  * settings table. Env vars stay as a fallback for a fresh install.
  */
 
-export const IMAGE_KINDS = { start: 'start_image', help: 'help_image' };
+export const IMAGE_KINDS = {
+  start: 'start_image',
+  help: 'help_image',
+  // one per tier: the picture that arrives with the congratulation
+  tier_basic: 'tier_basic_image',
+  tier_pro: 'tier_pro_image',
+  tier_turbo: 'tier_turbo_image',
+  tier_elite_max: 'tier_elite_max_image',
+};
 
 const imagesDir = path.join(path.dirname(path.resolve(config.dbPath)), 'images');
 
-const envFallback = (kind) => (kind === 'start' ? config.startImage : config.helpImage);
+const ENV_FALLBACK = {
+  start: () => config.startImage,
+  help: () => config.helpImage,
+  tier_basic: () => config.tierImages.basic,
+  tier_pro: () => config.tierImages.pro,
+  tier_turbo: () => config.tierImages.turbo,
+  tier_elite_max: () => config.tierImages.elite_max,
+};
+const envFallback = (kind) => ENV_FALLBACK[kind]?.() || '';
 
 /**
  * What to hand to sendPhoto for this kind, or null when there is nothing to show.
@@ -29,6 +45,7 @@ const envFallback = (kind) => (kind === 'start' ? config.startImage : config.hel
  * failing the message.
  */
 export function imageFor(kind) {
+  if (!IMAGE_KINDS[kind]) return null;
   const stored = store.settings.get(IMAGE_KINDS[kind]);
   if (stored && fs.existsSync(stored)) return new InputFile(stored);
   if (stored) logger.warn(`${kind} image missing on disk: ${stored}`);
