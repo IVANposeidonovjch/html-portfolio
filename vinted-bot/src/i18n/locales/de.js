@@ -52,6 +52,8 @@ Beispiel:
   'add.limit': 'Limit im Tarif {plan}: {limit} Links. Lösch einen oder wechsle den Tarif (/plan).',
   'add.created':
     '✅ „{name}“ hinzugefügt.\nPrüfung alle ~{seconds} Sek. Der erste Durchlauf merkt sich nur den Bestand — alles Neue danach kommt bei dir an.',
+  'add.atCapacity':
+    '⏳ Gerade sind alle Überwachungsplätze belegt, der Link wurde nicht angelegt. Versuch es in ein paar Minuten noch einmal — es werden laufend welche frei.',
 
   'url.err.notLink': 'Das sieht nicht nach einem Link aus.',
   'url.err.scheme': 'Es muss ein http(s)-Link sein.',
@@ -187,6 +189,11 @@ Beispiel:
   'plan.name.turbo': 'Sniper Elite',
   'plan.name.elite_max': 'Elite Max 🔒',
   'plan.scarcity': '🔥 <b>Sniper Elite</b> — nur eine begrenzte Anzahl Plätze.',
+  'plan.scarcitySeats': '🔥 <b>Sniper Elite</b> — noch {left} von {cap} Plätzen frei.',
+  'plan.soldOut': '🔥 <b>Sniper Elite</b> — alle {cap} Plätze sind belegt. Einer wird frei, sobald ein Abo ausläuft.',
+  'plan.full': '🚫 {plan} ist gerade voll — alle Plätze sind belegt. Es wurde nichts abgebucht. Ein Platz wird frei, sobald ein Abo ausläuft.',
+  'plan.refunded': '↩️ Während der Zahlung wurde {plan} voll, der Betrag wurde vollständig erstattet. Es wurde nichts abgebucht.',
+  'btn.soldOut': '{name} · keine Plätze frei',
   'plan.tiersHeader': '<b>Tarife</b>',
   'plan.tierRow': '{name} — {price} · Prüfung alle {interval} s · {links} Links · Schub {burst}',
   'plan.addon': 'Zusätzlich gekaufte Links: +{count}',

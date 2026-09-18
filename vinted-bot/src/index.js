@@ -4,6 +4,7 @@ import { createBot } from './bot/index.js';
 import { publishCommands } from './bot/commands.js';
 import { Sender } from './monitor/sender.js';
 import { Monitor } from './monitor/scheduler.js';
+import { capacityReport, statsLines } from './monitor/capacity.js';
 import { poolStatus } from './vinted/client.js';
 import { logger } from './util/logger.js';
 import { t } from './i18n/index.js';
@@ -58,6 +59,8 @@ bot.chatType('private').command('stats', async (ctx) => {
       `Отправлено объявлений: ${s.sent}`,
       `Циклов: ${r.cycles} · HTTP-запросов к Vinted: ${r.fetches} · в очереди отправки: ${r.queue}`,
       '',
+      ...statsLines(),
+      '',
       ...poolStatus().map(
         (p) =>
           `${p.domain} via ${p.proxy}: cookies=${p.cookies} csrf=${p.csrf ? 'да' : 'нет'} ` +
@@ -66,6 +69,20 @@ bot.chatType('private').command('stats', async (ctx) => {
     ].join('\n'),
   );
 });
+
+/**
+ * Past 90% nobody is reading the log. The admins are told once when it happens
+ * and once when it is over, and /stats carries the detail for whoever asks.
+ */
+monitor.onCapacity = ({ level, report }) => {
+  const load = `${report.total.toFixed(2)}/${report.capacity.toFixed(2)} req/s (${Math.round(report.utilization * 100)}%)`;
+  const text =
+    level === 'alert'
+      ? `🚨 Пул прокси загружен на ${Math.round(report.utilization * 100)}%: ${load}.\n` +
+        'Новые поиски скоро начнут отклоняться. Добавь прокси в PROXIES или подними PROXY_SAFE_RPS.'
+      : `✅ Нагрузка на пул вернулась в норму: ${load}.`;
+  for (const id of config.adminIds) bot.api.sendMessage(id, text).catch(() => {});
+};
 
 monitor.start();
 
@@ -79,8 +96,9 @@ process.once('SIGINT', () => stop('SIGINT'));
 process.once('SIGTERM', () => stop('SIGTERM'));
 
 logger.info(
-  `starting: intervals free=${config.intervals.free}s basic=${config.intervals.basic}s pro=${config.intervals.pro}s, ` +
-    `${config.vinted.proxies.length || 'no'} proxies, ${config.vinted.rps} rps/domain`,
+  `starting: intervals free=${config.intervals.free}s basic=${config.intervals.basic}s pro=${config.intervals.pro}s ` +
+    `turbo=${config.intervals.turbo}s, ${config.vinted.proxies.length || 'no'} proxies, ` +
+    `${config.vinted.rps} rps/domain, pool budget ${capacityReport().capacity.toFixed(2)} req/s`,
 );
 
 // Measured 17.09.2026: the catalog answers 403 to datacenter IPs. Without a

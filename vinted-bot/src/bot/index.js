@@ -1,8 +1,10 @@
 import { Bot, GrammyError, InlineKeyboard } from 'grammy';
 import {
-  PLANS, PUBLIC_PLANS, SELLABLE_PLANS, burstFor, config, intervalFor, searchLimitFor, starsFor, usdFor,
+  PLANS, PUBLIC_PLANS, SEAT_ENV_VAR, SELLABLE_PLANS, burstFor, config, intervalFor, searchLimitFor,
+  starsFor, usdFor,
 } from '../config.js';
 import * as store from '../db/index.js';
+import { admits, seatAvailableFor, seats, stagger } from '../monitor/capacity.js';
 import { LANGS, formatEvery, isLang, resolveLang, t } from '../i18n/index.js';
 import { logger } from '../util/logger.js';
 import { InvalidVintedUrl, parseSearchUrl } from '../vinted/url.js';
@@ -88,7 +90,20 @@ function nextTierPitch(lang, plan) {
 
 /** Plan names are product copy, so they live in the locales like everything else. */
 const planName = (lang, plan) => t(lang, `plan.name.${plan}`);
+
 const priceTag = (plan) => (usdFor(plan) ? `$${usdFor(plan)}` : '$0');
+
+/**
+ * "Only a limited number of spots" is a claim, and the seat cap is what makes
+ * it true — so the line is told in the spots that are actually left.
+ */
+function scarcityLine(lang) {
+  const seat = seats('turbo');
+  if (!seat.cap) return t(lang, 'plan.scarcity');
+  return seat.left
+    ? t(lang, 'plan.scarcitySeats', { left: seat.left, cap: seat.cap })
+    : t(lang, 'plan.soldOut', { cap: seat.cap });
+}
 
 /**
  * What this account may actually hold: the plan's allowance plus any links
@@ -487,8 +502,28 @@ export function createBot() {
     return createSearch(ownerId, lang, flow, chatId, threadId);
   }
 
-  /** Store the search and tell the user what happens next. */
+  /**
+   * Store the search and tell the user what happens next — unless the proxy
+   * pool cannot carry another poll, in which case nothing is stored. Selling a
+   * search that will run late is worse than saying "not right now".
+   */
   function createSearch(ownerId, lang, flow, chatId, threadId) {
+    const plan = store.effectivePlan(store.getUser(ownerId));
+    const interval = intervalFor(plan);
+    const verdict = admits({
+      domain: flow.parsed.domain,
+      canonicalKey: flow.parsed.canonicalKey,
+      interval,
+    });
+    flows.delete(ownerId);
+    if (!verdict.ok) {
+      logger.warn(
+        `refused a new search for ${ownerId}: ${verdict.projected.toFixed(2)} req/s would exceed ` +
+          `the pool's ${verdict.capacity.toFixed(2)} req/s`,
+      );
+      return t(lang, 'add.atCapacity');
+    }
+
     store.insertSearch.run({
       user_id: ownerId,
       name: flow.name,
@@ -498,12 +533,12 @@ export function createBot() {
       api_query: JSON.stringify(flow.parsed.query),
       dest_chat_id: chatId,
       dest_thread_id: threadId,
-      next_run_at: store.now(),
+      // spread the first poll over one window: ten signups in one minute must
+      // not become ten simultaneous fetches for the rest of the day
+      next_run_at: store.now() + stagger(interval),
       created_at: store.now(),
     });
-    flows.delete(ownerId);
-    const plan = store.effectivePlan(store.getUser(ownerId));
-    return t(lang, 'add.created', { name: flow.name, seconds: intervalFor(plan) });
+    return t(lang, 'add.created', { name: flow.name, seconds: interval });
   }
 
   /* ------------------------------ list / edit ---------------------------- */
@@ -563,10 +598,23 @@ export function createBot() {
   });
 
   bot.callbackQuery(/^s:toggle:(\d+)$/, async (ctx) => {
-    const { lang } = who(ctx);
+    const { user, lang } = who(ctx);
     const id = Number(ctx.match[1]);
     const search = store.getSearch.get(id);
     if (!search || search.user_id !== ctx.from.id) return ctx.answerCallbackQuery();
+
+    // Resuming is an activation like any other: it puts a poll back on the pool.
+    if (!search.enabled) {
+      const verdict = admits({
+        domain: search.domain,
+        canonicalKey: search.canonical_key,
+        interval: intervalFor(store.effectivePlan(user)),
+      });
+      if (!verdict.ok) {
+        return ctx.answerCallbackQuery({ text: t(lang, 'add.atCapacity'), show_alert: true });
+      }
+    }
+
     store.toggleSearch.run(search.enabled ? 0 : 1, id, ctx.from.id);
     const updated = store.getSearch.get(id);
     await ctx.answerCallbackQuery(t(lang, updated.enabled ? 'common.enabled' : 'common.disabled'));
@@ -740,14 +788,20 @@ export function createBot() {
       );
     }
     lines.push(...nextTierPitch(lang, plan));
-    lines.push('', t(lang, 'plan.scarcity'));
+    lines.push('', scarcityLine(lang));
     if (addon.stars) {
       lines.push(t(lang, 'plan.addonOffer', { links: addon.links, price: `$${addon.usd}` }));
     }
 
     const kb = new InlineKeyboard();
     for (const tier of SELLABLE_PLANS) {
-      if (starsFor(tier)) kb.text(`${planName(lang, tier)} · ${starsFor(tier)} ⭐`, `buy:${tier}`).row();
+      if (!starsFor(tier)) continue;
+      // a tier with no spots left says so on the button rather than opening an
+      // invoice that would be declined a tap later
+      const label = seatAvailableFor(tier, user.tg_id)
+        ? `${planName(lang, tier)} · ${starsFor(tier)} ⭐`
+        : t(lang, 'btn.soldOut', { name: planName(lang, tier) });
+      kb.text(label, `buy:${tier}`).row();
     }
     if (addon.stars) {
       kb.text(t(lang, 'btn.addon', { links: addon.links, stars: addon.stars }), 'buy:addon').row();
@@ -786,6 +840,9 @@ export function createBot() {
     // Only what is on sale: the reserved tier has no price and no button, and
     // a hand-crafted callback for it must not open an invoice either.
     if (!SELLABLE_PLANS.includes(what) || !starsFor(what)) return;
+    if (!seatAvailableFor(what, user.tg_id)) {
+      return ctx.reply(t(lang, 'plan.full', { plan: planName(lang, what) }));
+    }
     await ctx.api.sendInvoice(
       ctx.chat.id,
       `Vinted Monitor ${planName(lang, what)}`,
@@ -800,7 +857,19 @@ export function createBot() {
     );
   });
 
-  bot.on('pre_checkout_query', (ctx) => ctx.answerPreCheckoutQuery(true));
+  /**
+   * The last moment before the money moves. A tier that filled up while the
+   * invoice was open is declined here, which is Telegram's own way of not
+   * charging someone for something they cannot have.
+   */
+  bot.on('pre_checkout_query', async (ctx) => {
+    const [kind, what] = ctx.preCheckoutQuery.invoice_payload.split(':');
+    if (kind === 'plan' && !seatAvailableFor(what, ctx.from.id)) {
+      const lang = store.getUser(ctx.from.id)?.lang || 'en';
+      return ctx.answerPreCheckoutQuery(false, t(lang, 'plan.full', { plan: planName(lang, what) }));
+    }
+    return ctx.answerPreCheckoutQuery(true);
+  });
 
   bot.on('message:successful_payment', async (ctx) => {
     const { user, lang } = who(ctx);
@@ -819,6 +888,20 @@ export function createBot() {
     }
 
     if (kind !== 'plan' || !SELLABLE_PLANS.includes(what)) return;
+
+    // Two buyers can clear pre-checkout for the last seat within the same
+    // second. The one who lost gets the stars back rather than a tier that
+    // does not exist for them.
+    if (!seatAvailableFor(what, user.tg_id)) {
+      const charge = ctx.msg.successful_payment.telegram_payment_charge_id;
+      try {
+        await ctx.api.refundStarPayment(user.tg_id, charge);
+      } catch (err) {
+        logger.error(`refund failed for ${user.tg_id} charge=${charge}: ${err.description || err.message}`);
+      }
+      return ctx.reply(t(lang, 'plan.refunded', { plan: planName(lang, what) }));
+    }
+
     const base = Math.max(store.now(), user.plan_until || 0);
     const upgrade = store.effectivePlan(user) !== what;
     store.setPlan.run(what, base + config.payments.planDays * 86400, user.tg_id);
@@ -836,6 +919,17 @@ export function createBot() {
       return ctx.reply(`Usage: /grant <tg_id> <${PLANS.join('|')}> [days]`);
     }
     store.upsertUser(Number(id), null);
+
+    // The cap is a real number or it is nothing: handing out an eleventh seat
+    // of ten by hand is exactly how "limited spots" stops being true.
+    if (plan !== 'free' && !seatAvailableFor(plan, Number(id))) {
+      const seat = seats(plan);
+      return ctx.reply(
+        `Мест на ${plan} нет: занято ${seat.used}/${seat.cap}. ` +
+          `Подними ${SEAT_ENV_VAR[plan]} в .env и перезапусти бота.`,
+      );
+    }
+
     const until = plan === 'free' ? null : store.now() + (Number(days) || 30) * 86400;
     const before = store.effectivePlan(store.getUser(Number(id)));
     store.setPlan.run(plan, until, Number(id));

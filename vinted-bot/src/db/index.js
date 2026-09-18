@@ -157,6 +157,18 @@ export const markError = db.prepare(
 );
 export const bumpSent = db.prepare('UPDATE searches SET sent_count = sent_count + ? WHERE id = ?');
 
+/**
+ * Every poll the proxy pool is currently committed to, with the plan that
+ * paces it. One row per active search — identical searches are collapsed by
+ * canonical key where the load is computed, since they share one fetch.
+ */
+export const activePolls = db.prepare(
+  `SELECT s.domain, s.canonical_key, u.plan, u.plan_until
+   FROM searches s
+   JOIN users u ON u.tg_id = s.user_id
+   WHERE s.enabled = 1 AND u.monitoring_enabled = 1`,
+);
+
 /* ------------------------------- dedupe ------------------------------- */
 
 const insertSeen = db.prepare(
@@ -237,6 +249,11 @@ export const listAllUsers = db.prepare(
    LEFT JOIN searches s ON s.user_id = u.tg_id
    GROUP BY u.tg_id
    ORDER BY active DESC, sent DESC, u.created_at`,
+);
+
+/** Accounts holding a plan whose paid period has not run out — one seat each. */
+export const countPlanHolders = db.prepare(
+  'SELECT COUNT(*) AS n FROM users WHERE plan = ? AND (plan_until IS NULL OR plan_until > ?)',
 );
 
 /* -------------------------------- stats ------------------------------- */

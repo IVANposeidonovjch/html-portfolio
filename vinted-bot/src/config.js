@@ -13,9 +13,9 @@ export const config = {
     free: num(process.env.INTERVAL_FREE, 900),
     basic: num(process.env.INTERVAL_BASIC, 300),
     pro: num(process.env.INTERVAL_PRO, 60),
-    // turbo is not sold; without its own value it would fall back to free,
-    // which would make the top tier the slowest one to poll
-    turbo: num(process.env.INTERVAL_TURBO, num(process.env.INTERVAL_PRO, 60)),
+    // its own value, not Ranger's: the jump to the top tier is paid for in
+    // speed, so it has to be measurably faster rather than the same poll
+    turbo: num(process.env.INTERVAL_TURBO, 30),
     // the reserved tier: never slower than the fastest thing on sale
     elite_max: num(process.env.INTERVAL_ELITE_MAX, num(process.env.INTERVAL_TURBO, 30)),
   },
@@ -41,6 +41,12 @@ export const config = {
     // pin one entry of src/vinted/endpoints.js; empty = detect at runtime
     strategy: process.env.VINTED_API_STRATEGY || '',
     proxies: list(process.env.PROXIES),
+    // What each proxy is believed to survive, sustained. One number per entry
+    // of PROXIES, in the same order; anything not listed uses the default.
+    // Per proxy rather than one constant because a residential pool and a
+    // single cheap IP are not safe at the same rate.
+    proxyRps: list(process.env.PROXY_SAFE_RPS).map(Number),
+    proxyRpsDefault: num(process.env.PROXY_SAFE_RPS_DEFAULT, 0.7),
     userAgent:
       process.env.USER_AGENT ||
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
@@ -90,6 +96,27 @@ export const config = {
   },
 
   dedupePerDestination: bool(process.env.DEDUPE_PER_DESTINATION, true),
+
+  // How close to the pool's safe rate we let things get before saying so, and
+  // how often the same standing alarm is repeated.
+  capacity: {
+    warnAt: num(process.env.CAPACITY_WARN_PCT, 80) / 100,
+    alertAt: num(process.env.CAPACITY_ALERT_PCT, 90) / 100,
+    checkEverySec: num(process.env.CAPACITY_CHECK_SEC, 60),
+    repeatAfterSec: num(process.env.CAPACITY_REPEAT_MIN, 60) * 60,
+  },
+
+  /**
+   * How many accounts may hold a tier at once. 0 = uncapped. Named after what
+   * users see, like the tier pictures, because that is how the cap is talked
+   * about — "Sniper Elite has ten spots", not "turbo has ten spots".
+   */
+  seats: {
+    basic: num(process.env.MAX_HUNTER_SEATS, 0),
+    pro: num(process.env.MAX_RANGER_SEATS, 0),
+    turbo: num(process.env.MAX_SNIPER_ELITE_SEATS, 10),
+    elite_max: num(process.env.MAX_ELITE_MAX_SEATS, 0),
+  },
 
   payments: {
     // Stars charged per plan, and the dollar figure shown in the comparison.
@@ -152,6 +179,19 @@ export function searchLimitFor(plan) {
 export function burstFor(plan) {
   return config.delivery.burst[plan] ?? config.telegram.burst;
 }
+
+/** How many accounts may hold this tier at once. 0 = as many as show up. */
+export function seatCapFor(plan) {
+  return config.seats[plan] ?? 0;
+}
+
+/** Which setting to raise when a tier runs out of spots, for the admin's sake. */
+export const SEAT_ENV_VAR = {
+  basic: 'MAX_HUNTER_SEATS',
+  pro: 'MAX_RANGER_SEATS',
+  turbo: 'MAX_SNIPER_ELITE_SEATS',
+  elite_max: 'MAX_ELITE_MAX_SEATS',
+};
 
 export const starsFor = (plan) => config.payments.stars[plan] ?? 0;
 export const usdFor = (plan) => config.payments.usd[plan] ?? 0;

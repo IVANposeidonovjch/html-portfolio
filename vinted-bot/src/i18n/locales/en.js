@@ -52,6 +52,8 @@ Example:
   'add.limit': '{plan} plan limit: {limit} links. Delete one or upgrade (/plan).',
   'add.created':
     '✅ "{name}" added.\nChecked every ~{seconds}s. The first pass only records what is already listed — you will get everything new after that.',
+  'add.atCapacity':
+    '⏳ Every monitoring slot is busy right now, so this link was not added. Try again in a few minutes — slots free up all the time.',
 
   'url.err.notLink': "That doesn't look like a link.",
   'url.err.scheme': 'An http(s) link is required.',
@@ -187,6 +189,11 @@ Example:
   'plan.name.turbo': 'Sniper Elite',
   'plan.name.elite_max': 'Elite Max 🔒',
   'plan.scarcity': '🔥 <b>Sniper Elite</b> — only a limited number of spots.',
+  'plan.scarcitySeats': '🔥 <b>Sniper Elite</b> — {left} of {cap} spots left.',
+  'plan.soldOut': '🔥 <b>Sniper Elite</b> — all {cap} spots are taken. One frees up when a subscription lapses.',
+  'plan.full': '🚫 {plan} is full right now — every spot is taken. Nothing was charged. A spot frees up when a subscription lapses.',
+  'plan.refunded': '↩️ {plan} filled up while the payment was going through, so it was refunded in full. Nothing was charged.',
+  'btn.soldOut': '{name} · no spots left',
   'plan.tiersHeader': '<b>Plans</b>',
   'plan.tierRow': '{name} — {price} · checks every {interval}s · {links} links · burst {burst}',
   'plan.addon': 'Extra links bought: +{count}',

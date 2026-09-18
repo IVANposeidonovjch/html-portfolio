@@ -548,13 +548,19 @@ test('every public tier but the top one is told what the next one buys', () => {
 });
 
 test('the ratios are the real ones, and a clause only appears when it differs', () => {
-  // Ranger and Sniper Elite poll at the same interval today: claiming a speed
-  // gain there would be false, so the line must be absent rather than "1x"
-  const sameSpeed = cfg.intervalFor('pro') === cfg.intervalFor('turbo');
-  assert.ok(sameSpeed, 'this test exists because those two match; retune it if that changes');
   assert.equal(cfg.intervalFor('basic') / cfg.intervalFor('pro'), 5, 'Hunter to Ranger really is 5x');
   assert.equal(cfg.searchLimitFor('pro') / cfg.searchLimitFor('basic'), 4);
   assert.equal(cfg.usdFor('pro') - cfg.usdFor('basic'), 10);
+});
+
+test('the top tier is paid for in speed, not only in links and burst', () => {
+  // it used to share Ranger's interval, which made $60 of the price buy
+  // nothing a user could feel
+  assert.ok(
+    cfg.intervalFor('turbo') < cfg.intervalFor('pro'),
+    `Sniper Elite polls every ${cfg.intervalFor('turbo')}s, same as Ranger — the upsell would be a lie`,
+  );
+  assert.ok(cfg.usdFor('turbo') > cfg.usdFor('pro'), 'and it costs more than the tier below it');
 });
 
 /* ------------------------------ add-on ----------------------------------- */
@@ -889,6 +895,166 @@ test('an unknown plan still lands on free, not on undefined', () => {
   assert.equal(cfg.intervalFor('nonsense'), cfg.intervalFor('free'));
   assert.equal(cfg.searchLimitFor('nonsense'), cfg.searchLimitFor('free'));
   assert.equal(cfg.burstFor('nonsense'), cfg.config.telegram.burst);
+});
+
+/* ---------------------------- proxy capacity ----------------------------- */
+
+const capacity = await import('../src/monitor/capacity.js');
+
+test('each proxy carries its own safe rate, not one shared constant', () => {
+  const { proxies, proxyRps } = cfg.config.vinted;
+  cfg.config.vinted.proxies = ['http://a', 'http://b', 'http://c'];
+  cfg.config.vinted.proxyRps = [1.2, 0.5];
+  try {
+    const slots = capacity.proxySlots();
+    assert.deepEqual(slots.map((s) => s.rps), [1.2, 0.5, 0.7], 'the third falls back to the default');
+    assert.equal(capacity.totalCapacity().toFixed(1), '2.4', 'the budget is the sum of the pool');
+  } finally {
+    Object.assign(cfg.config.vinted, { proxies, proxyRps });
+  }
+});
+
+test('with no proxy configured there is still one route, with a safe rate', () => {
+  assert.deepEqual(capacity.proxySlots(), [{ proxy: 'direct', rps: 0.7 }]);
+  assert.equal(capacity.totalCapacity(), 0.7);
+});
+
+await (async () => {
+  const fr = parseSearchUrl('https://www.vinted.fr/catalog?search_text=helmut&price_to=100');
+  const add = (userId, p) =>
+    store.insertSearch.run({
+      user_id: userId, name: 'load', url: p.normalizedUrl, domain: p.domain,
+      canonical_key: p.canonicalKey, api_query: JSON.stringify(p.query),
+      dest_chat_id: userId, dest_thread_id: null, next_run_at: 0, created_at: store.now(),
+    }).lastInsertRowid;
+
+  store.upsertUser(7001, 'slowpoke', 'en'); // free: 900s
+  store.upsertUser(7002, 'quick', 'en');
+  store.setPlan.run('turbo', store.now() + 86400, 7002); // 30s
+
+  const before = capacity.capacityReport();
+  const one = add(7001, fr);
+  const withOne = capacity.capacityReport();
+
+  test('load is counted per domain, one request per interval per search', () => {
+    assert.equal(withOne.keys, before.keys + 1, 'a new canonical key is a new poll');
+    assert.ok(
+      Math.abs(withOne.total - before.total - 1 / cfg.intervalFor('free')) < 1e-9,
+      'a free search costs exactly one fetch per free interval',
+    );
+    const domain = withOne.domains.find((d) => d.domain === 'www.vinted.fr');
+    assert.equal(domain.keys, 1, 'and it is charged to its own domain');
+  });
+
+  const two = add(7001, fr); // same user, same URL again
+  test('identical searches share the fetch and cost nothing extra', () => {
+    const now = capacity.capacityReport();
+    assert.equal(now.keys, withOne.keys, 'a duplicate key is still one poll');
+    assert.ok(Math.abs(now.total - withOne.total) < 1e-9, 'and adds no load');
+  });
+
+  const three = add(7002, fr); // a turbo user on the same key
+  test('a shared key is paced by its fastest holder', () => {
+    const now = capacity.capacityReport();
+    assert.equal(now.keys, withOne.keys, 'still one key');
+    assert.ok(
+      Math.abs(now.total - before.total - 1 / cfg.intervalFor('turbo')) < 1e-9,
+      'the turbo holder pulls the shared fetch up to its own rate',
+    );
+  });
+
+  test('a search that joins an already faster key is admitted for free', () => {
+    const verdict = capacity.admits({
+      domain: fr.domain, canonicalKey: fr.canonicalKey, interval: cfg.intervalFor('free'),
+    });
+    assert.equal(verdict.delta, 0, 'it rides a fetch that is happening anyway');
+    assert.equal(verdict.ok, true);
+  });
+
+  test('a new key past the budget is refused, a free rider still is not', () => {
+    const { proxyRpsDefault } = cfg.config.vinted;
+    cfg.config.vinted.proxyRpsDefault = 0.001; // a pool with nothing left
+    try {
+      const fresh = parseSearchUrl('https://www.vinted.it/catalog?search_text=margiela&price_to=500');
+      const refused = capacity.admits({
+        domain: fresh.domain, canonicalKey: fresh.canonicalKey, interval: cfg.intervalFor('free'),
+      });
+      assert.equal(refused.ok, false, 'an overloaded pool must not take another poll');
+      assert.ok(refused.projected > refused.capacity);
+
+      const rider = capacity.admits({
+        domain: fr.domain, canonicalKey: fr.canonicalKey, interval: cfg.intervalFor('free'),
+      });
+      assert.equal(rider.ok, true, 'refusing a search that adds no load punishes nobody usefully');
+    } finally {
+      cfg.config.vinted.proxyRpsDefault = proxyRpsDefault;
+    }
+  });
+
+  for (const id of [one, two]) store.deleteSearch.run(id, 7001);
+  store.deleteSearch.run(three, 7002);
+  store.setPlan.run('free', null, 7002);
+
+  test('the pool is left as it was found', () => {
+    const after = capacity.capacityReport();
+    assert.equal(after.keys, before.keys);
+    assert.ok(Math.abs(after.total - before.total) < 1e-9);
+  });
+})();
+
+test('a new search starts somewhere inside its own interval window', () => {
+  const interval = cfg.intervalFor('pro');
+  const offsets = Array.from({ length: 200 }, () => capacity.stagger(interval));
+  assert.ok(offsets.every((o) => o >= 0 && o < interval), 'never outside one window');
+  assert.ok(new Set(offsets).size > 50, 'a burst of signups must not land in the same second');
+});
+
+test('the alarm speaks on a crossing and then keeps quiet', () => {
+  let clock = 0;
+  const alarm = new capacity.CapacityAlarm(() => clock);
+  const at = (utilization) => alarm.check({ utilization, total: 1, capacity: 1, keys: 1, domains: [] });
+
+  assert.equal(at(0.5), null, 'a quiet pool is not news');
+  assert.equal(at(0.82).level, 'warn', 'crossing the warn line is');
+  assert.equal(at(0.85), null, 'staying there is not, or it would be a message a minute');
+  assert.equal(at(0.95).level, 'alert', 'but getting worse is');
+  clock += cfg.config.capacity.repeatAfterSec;
+  assert.equal(at(0.95).level, 'alert', 'a standing alarm is repeated after the cooldown');
+  const back = at(0.1);
+  assert.equal(back.level, 'ok', 'and recovery is worth saying once');
+  assert.equal(back.previous, 'alert', 'so the message can be sent to whoever heard the alarm');
+  assert.equal(at(0.1), null, 'once');
+});
+
+/* --------------------------------- seats --------------------------------- */
+
+test('a seat cap counts live holders and blocks nobody when it is 0', () => {
+  const original = cfg.config.seats.turbo;
+  try {
+    cfg.config.seats.turbo = 0;
+    assert.equal(capacity.seats('turbo').full, false, '0 means uncapped, not "no spots"');
+    assert.equal(capacity.seats('turbo').left, null);
+    assert.equal(capacity.seatAvailableFor('turbo', 999999), true);
+
+    store.upsertUser(7100, 'seated', 'en');
+    store.setPlan.run('turbo', store.now() + 86400, 7100);
+    const used = capacity.seats('turbo').used;
+    assert.ok(used >= 1, 'a live holder occupies a seat');
+
+    cfg.config.seats.turbo = used;
+    const full = capacity.seats('turbo');
+    assert.equal(full.full, true, 'the last seat taken means full');
+    assert.equal(full.left, 0);
+    assert.equal(capacity.seatAvailableFor('turbo', 999999), false, 'a newcomer is turned away');
+    assert.equal(capacity.seatAvailableFor('turbo', 7100), true, 'a renewal is not a new seat');
+
+    // an expired holder is not holding anything
+    store.setPlan.run('turbo', store.now() - 10, 7100);
+    assert.equal(capacity.seats('turbo').used, used - 1, 'a lapsed plan frees its seat');
+  } finally {
+    store.setPlan.run('free', null, 7100);
+    cfg.config.seats.turbo = original;
+  }
 });
 
 /* ------------------------------- delivery -------------------------------- */
@@ -1585,6 +1751,133 @@ await (async () => {
   });
 
   store.deleteSearch.run(evil, 4242);
+
+  /* ------------------------ seats, end to end -------------------------- */
+
+  const BUYER = 7200;
+  store.upsertUser(BUYER, 'buyer', 'en');
+  const seatsBefore = cfg.config.seats.turbo;
+  const starsBefore = cfg.config.payments.stars.turbo;
+  cfg.config.payments.stars.turbo = 500;
+  cfg.config.seats.turbo = capacity.seats('turbo').used; // every spot taken
+
+  const planFull = await drive(pressUpdate('m:plan', BUYER), BUYER);
+  test('a tier with no spots left says so on the button instead of selling', () => {
+    const edit = planFull.find((c) => c.method === 'editMessageText');
+    const buttons = edit.payload.reply_markup.inline_keyboard.flat();
+    const turbo = buttons.find((b) => b.callback_data === 'buy:turbo');
+    assert.ok(turbo, 'the tier is still listed');
+    assert.match(turbo.text, /no spots left/i, `the button still offers a sale: ${turbo.text}`);
+    assert.ok(!turbo.text.includes('⭐'), 'and it must not show a price it will not honour');
+    assert.match(edit.payload.text, /0 of \d+ spots|all \d+ spots/i, 'the scarcity line tells the truth');
+  });
+
+  const tapped = await drive(pressUpdate('buy:turbo', BUYER), BUYER);
+  test('tapping it explains instead of opening an invoice', () => {
+    assert.ok(!tapped.some((c) => c.method === 'sendInvoice'), 'no invoice for a tier that is full');
+    const reply = tapped.find((c) => c.method === 'sendMessage');
+    assert.match(reply.payload.text, /full right now/i);
+    assert.ok(!/[<>]/.test(reply.payload.text), 'this one is sent as plain text, so no markup in it');
+  });
+
+  const preCheckout = await drive(
+    {
+      update_id: Math.floor(Math.random() * 1e6),
+      pre_checkout_query: {
+        id: '42', from: from(BUYER, 'buyer'), currency: 'XTR', total_amount: 500,
+        invoice_payload: 'plan:turbo',
+      },
+    },
+    BUYER,
+  );
+  test('an invoice opened before the last seat went is declined, not charged', () => {
+    const answer = preCheckout.find((c) => c.method === 'answerPreCheckoutQuery');
+    assert.ok(answer, 'Telegram must get an answer within 10 seconds');
+    assert.equal(answer.payload.ok, false, 'saying yes here is what takes the money');
+    assert.match(answer.payload.error_message, /full/i, 'and the buyer is told why');
+    assert.ok(answer.payload.error_message.length <= 255, 'Telegram truncates anything longer');
+  });
+
+  const paidAnyway = await drive(
+    {
+      update_id: Math.floor(Math.random() * 1e6),
+      message: {
+        message_id: 5, date: Math.floor(Date.now() / 1000),
+        chat: { id: BUYER, type: 'private' }, from: from(BUYER, 'buyer'),
+        successful_payment: {
+          currency: 'XTR', total_amount: 500, invoice_payload: 'plan:turbo',
+          telegram_payment_charge_id: 'charge-1', provider_payment_charge_id: 'p-1',
+        },
+      },
+    },
+    BUYER,
+  );
+  test('two buyers racing for the last seat: the loser is refunded, not left short', () => {
+    const refund = paidAnyway.find((c) => c.method === 'refundStarPayment');
+    assert.ok(refund, 'the stars must go back');
+    assert.equal(refund.payload.telegram_payment_charge_id, 'charge-1');
+    assert.equal(store.getUser(BUYER).plan, 'free', 'and no tier is handed out');
+    const told = paidAnyway.find((c) => c.method === 'sendMessage');
+    assert.match(told.payload.text, /refunded/i);
+  });
+
+  const grantFull = await runCommand(`/grant ${BUYER} turbo 30`, 1);
+  test('/grant respects the cap too, or the number is just decoration', () => {
+    assert.match(grantFull, /MAX_SNIPER_ELITE_SEATS/, 'it names the setting to raise');
+    assert.equal(store.getUser(BUYER).plan, 'free', 'nobody is seated past the cap');
+  });
+
+  cfg.config.seats.turbo = capacity.seats('turbo').used + 1; // one spot opens
+  const grantOk = await runCommand(`/grant ${BUYER} turbo 30`, 1);
+  test('and hands the tier over the moment a spot exists', () => {
+    assert.match(grantOk, /OK/);
+    assert.equal(store.getUser(BUYER).plan, 'turbo');
+  });
+
+  const statsOut = capacity.statsLines().join('\n');
+  test('/stats reports load against capacity, and seats used', () => {
+    assert.match(statsOut, /Нагрузка: \d+\.\d+ из \d+\.\d+ req\/s \(\d+%\)/, 'load vs budget');
+    assert.match(statsOut, /Прокси: .*\d+(\.\d+)? req\/s/, 'and what the budget is made of');
+    assert.match(statsOut, /Места: .*Sniper Elite \d+\/\d+ \(свободно \d+\)/, 'seats used and left');
+    assert.ok(!statsOut.includes('@'), 'a proxy string carries a password — it must not be printed');
+  });
+
+  store.setPlan.run('free', null, BUYER);
+  cfg.config.seats.turbo = seatsBefore;
+  cfg.config.payments.stars.turbo = starsBefore;
+
+  /* --------------------- capacity, end to end -------------------------- */
+
+  const ADDER = 7300;
+  store.upsertUser(ADDER, 'adder', 'en');
+  const addLink = async (url, name) => {
+    await drive(textUpdate('/add', ADDER, [{ type: 'bot_command', offset: 0, length: 4 }], 'adder'), ADDER);
+    await drive(textUpdate(url, ADDER, undefined, 'adder'), ADDER);
+    await drive(textUpdate(name, ADDER, undefined, 'adder'), ADDER);
+    return drive(pressUpdate('dest:private', ADDER), ADDER);
+  };
+
+  const budget = cfg.config.vinted.proxyRpsDefault;
+  cfg.config.vinted.proxyRpsDefault = 0.0001; // a pool with nothing left to give
+  const refusedAdd = await addLink('https://www.vinted.pl/catalog?search_text=margiela&price_to=500', 'Margiela');
+  cfg.config.vinted.proxyRpsDefault = budget;
+
+  test('at capacity a new link is refused, not quietly piled onto the proxies', () => {
+    const edit = refusedAdd.find((c) => c.method === 'editMessageText');
+    assert.match(edit.payload.text, /slots? .*(busy|free up)/i, `got: ${edit.payload.text}`);
+    assert.equal(store.listSearches.all(ADDER).length, 0, 'and nothing is stored');
+  });
+
+  const acceptedAdd = await addLink('https://www.vinted.pl/catalog?search_text=margiela&price_to=500', 'Margiela');
+  test('with room in the pool the same link goes through, staggered', () => {
+    const edit = acceptedAdd.find((c) => c.method === 'editMessageText');
+    assert.match(edit.payload.text, /Margiela/);
+    const [search] = store.listSearches.all(ADDER);
+    assert.ok(search, 'the search must exist this time');
+    const offset = search.next_run_at - store.now();
+    assert.ok(offset >= 0 && offset < cfg.intervalFor('free'), `first poll ${offset}s away, outside the window`);
+    store.deleteSearch.run(search.id, ADDER);
+  });
 })();
 
 await Promise.all(pending);

@@ -5,6 +5,7 @@ import { logger } from '../util/logger.js';
 import { jitter, sleep } from '../util/ratelimit.js';
 import { fetchCatalog, VintedError } from '../vinted/client.js';
 import { normalizeAll } from '../vinted/normalize.js';
+import { CapacityAlarm, capacityReport } from './capacity.js';
 
 const TICK_MS = 1000;
 const BATCH = 40; // searches picked up per tick
@@ -18,16 +19,40 @@ export class Monitor {
     this.cycles = 0;
     this.fetches = 0;
     this.notifications = 0;
+    this.alarm = new CapacityAlarm();
+    /** Set by the caller to reach the admins when the pool is running hot. */
+    this.onCapacity = null;
   }
 
   start() {
     this.loop();
     this.prune = setInterval(() => store.pruneOldRows(), 6 * 3600 * 1000);
+    this.watch = setInterval(() => this.checkCapacity(), config.capacity.checkEverySec * 1000);
+    // a restart into an already overloaded pool should say so now, not in a minute
+    this.checkCapacity();
   }
 
   stop() {
     this.stopped = true;
     clearInterval(this.prune);
+    clearInterval(this.watch);
+  }
+
+  /** Log every crossing; hand the serious ones to whoever can act on them. */
+  checkCapacity() {
+    const crossing = this.alarm.check(capacityReport());
+    if (!crossing) return;
+    const { level, report } = crossing;
+    const line =
+      `pool load ${report.total.toFixed(2)}/${report.capacity.toFixed(2)} req/s ` +
+      `(${Math.round(report.utilization * 100)}%), ${report.keys} distinct searches`;
+    if (level === 'ok') logger.info(`capacity back to normal: ${line}`);
+    else logger.warn(`capacity ${level}: ${line}`);
+    // 80% is an operator's problem; 90% is someone's problem now. Recovery is
+    // only worth a message to whoever was told there was something wrong.
+    if (level === 'alert' || (level === 'ok' && crossing.previous === 'alert')) {
+      this.onCapacity?.(crossing);
+    }
   }
 
   async loop() {
