@@ -19,6 +19,7 @@ const store = await import('../src/db/index.js');
 const { Monitor } = await import('../src/monitor/scheduler.js');
 const { renderItem, itemKeyboard, demoItem, DEMO_SEARCH } = await import('../src/bot/format.js');
 const { helpText, helpParts } = await import('../src/bot/help.js');
+const cfg = await import('../src/config.js');
 const { LOCALES, allLabels, resolveLang, t } = await import('../src/i18n/index.js');
 const { STRATEGIES, extractItems, strategyByName, orderedStrategies, filtersLookHonoured } =
   await import('../src/vinted/endpoints.js');
@@ -470,6 +471,92 @@ test('plan expiry falls back to free', () => {
   assert.equal(store.effectivePlan(store.getUser(1)), 'pro');
 });
 
+/* ------------------------------ add-on ----------------------------------- */
+
+test('bought links stack on the plan and die with it', () => {
+  store.upsertUser(8100, 'addon', 'en');
+  store.setPlan.run('basic', store.now() + 86400, 8100);
+  store.addExtraLinks.run(10, 8100);
+  const paid = store.getUser(8100);
+  assert.equal(paid.extra_links, 10);
+  assert.equal(
+    cfg.searchLimitFor(store.effectivePlan(paid)) + paid.extra_links,
+    cfg.searchLimitFor('basic') + 10,
+  );
+
+  // the plan lapses: the add-on it was sold on top of goes with it
+  store.setPlan.run('basic', store.now() - 10, 8100);
+  const lapsed = store.getUser(8100);
+  assert.equal(store.effectivePlan(lapsed), 'free');
+  assert.equal(lapsed.plan, 'free', 'the row itself is retired, not just read as free');
+  assert.equal(lapsed.extra_links, 0, 'extra links cannot outlive the plan that carried them');
+});
+
+/* ----------------------------- near-miss note ---------------------------- */
+
+await (async () => {
+  const seen = [];
+  const fomoMonitor = new Monitor({ enqueue: (j) => seen.push(j), get size() { return 0; } });
+  const oldItem = (id) => ({ ...normalizeItem(rawItem(id), 'www.vinted.de'), uploadedAt: store.now() - 120 });
+
+  const mkFor = (uid, name) => {
+    const info = store.insertSearch.run({
+      user_id: uid, name, url: parsed.normalizedUrl, domain: parsed.domain,
+      canonical_key: parsed.canonicalKey, api_query: JSON.stringify(parsed.query),
+      dest_chat_id: uid, dest_thread_id: null, next_run_at: 0, created_at: store.now(),
+    });
+    const search = store.getSearch.get(info.lastInsertRowid);
+    fomoMonitor.handleResult(search, [oldItem(500)]); // prime
+    return store.getSearch.get(search.id);
+  };
+
+  store.upsertUser(8200, 'slow', 'en');
+  store.setPlan.run('basic', store.now() + 86400, 8200);
+  const slow = mkFor(8200, 'Slow');
+  seen.length = 0;
+  fomoMonitor.handleResult(slow, [oldItem(501), oldItem(502)]);
+
+  test('a slower plan is told what the delay cost, once', () => {
+    assert.equal(seen.length, 2, 'both listings are still delivered');
+    assert.match(seen[0].note ?? '', /Sniper Elite/, 'the first carries the note');
+    assert.equal(seen[1].note, null, 'the second does not repeat it');
+    assert.match(seen[0].note, /1\d\ds/, 'and it names the real age of the listing');
+  });
+
+  seen.length = 0;
+  fomoMonitor.handleResult(store.getSearch.get(slow.id), [oldItem(503)]);
+  test('and not again the same day', () => {
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].note, null, 'the daily throttle holds across polls');
+  });
+
+  store.upsertUser(8300, 'fast', 'en');
+  store.setPlan.run('turbo', store.now() + 86400, 8300);
+  const fast = mkFor(8300, 'Fast');
+  seen.length = 0;
+  fomoMonitor.handleResult(fast, [oldItem(504)]);
+  test('the tiers that are already instant are never nudged', () => {
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].note, null, 'telling Sniper Elite it was late would be a lie');
+  });
+
+  store.setPlan.run('elite_max', store.now() + 86400, 8300);
+  seen.length = 0;
+  fomoMonitor.handleResult(store.getSearch.get(fast.id), [oldItem(505)]);
+  test('nor is the reserved tier', () => {
+    assert.equal(seen[0].note, null);
+  });
+
+  // a fresh listing is not a near miss at all
+  store.markFomoNudge.run(0, 8200);
+  seen.length = 0;
+  const fresh = { ...normalizeItem(rawItem(600), 'www.vinted.de'), uploadedAt: store.now() };
+  fomoMonitor.handleResult(store.getSearch.get(slow.id), [fresh]);
+  test('a listing caught immediately carries no note', () => {
+    assert.equal(seen[0].note, null, 'nothing was missed, so there is nothing to say');
+  });
+})();
+
 /* ------------------------ supergroup migration -------------------------- */
 
 test('a group upgraded to a supergroup takes its searches with it', () => {
@@ -666,13 +753,27 @@ test('admin commands go only to the admin own chat, in their language', () => {
 
 /* ---------------------------- plan tiers --------------------------------- */
 
-const cfg = await import('../src/config.js');
+test('the reserved tier exists, is hidden, and has no price', () => {
+  assert.ok(cfg.PLANS.includes('elite_max'));
+  assert.ok(cfg.isHiddenPlan('elite_max'), 'it must not appear in the public comparison');
+  assert.ok(!cfg.SELLABLE_PLANS.includes('elite_max'), 'and never be purchasable');
+  assert.equal(cfg.starsFor('elite_max'), 0, 'there is no price for it');
+  assert.equal(cfg.usdFor('elite_max'), 0);
+});
 
-test('the hidden tier exists and is not for sale', () => {
-  assert.ok(cfg.PLANS.includes('turbo'));
-  assert.ok(!cfg.SELLABLE_PLANS.includes('turbo'), 'turbo must never be purchasable');
-  assert.deepEqual(cfg.SELLABLE_PLANS, ['basic', 'pro']);
-  assert.equal(cfg.config.payments.turboStars, undefined, 'there is no price for it');
+test('Sniper Elite is a normal public tier now', () => {
+  assert.ok(cfg.SELLABLE_PLANS.includes('turbo'), 'it is on sale');
+  assert.ok(!cfg.isHiddenPlan('turbo'), 'and listed publicly');
+  assert.deepEqual(cfg.PUBLIC_PLANS, ['free', 'basic', 'pro', 'turbo']);
+  assert.ok(cfg.usdFor('turbo') > cfg.usdFor('pro'), 'priced above the tier below it');
+});
+
+test('the reserved tier outruns everything on sale', () => {
+  for (const sold of cfg.PUBLIC_PLANS) {
+    assert.ok(cfg.burstFor('elite_max') >= cfg.burstFor(sold), `burst must beat ${sold}`);
+    assert.ok(cfg.intervalFor('elite_max') <= cfg.intervalFor(sold), `polling must beat ${sold}`);
+    assert.ok(cfg.searchLimitFor('elite_max') >= cfg.searchLimitFor(sold), `links must beat ${sold}`);
+  }
 });
 
 test('paid speed rises with the tier, free and basic get no advantage', () => {
@@ -681,12 +782,21 @@ test('paid speed rises with the tier, free and basic get no advantage', () => {
   assert.ok(cfg.burstFor('turbo') > cfg.burstFor('pro'), 'and the hidden one faster still');
 });
 
-test('turbo inherits the fast polling, not free defaults', () => {
-  // intervalFor() falls back to free for an unknown plan, which would have made
-  // the top tier the slowest to poll
-  assert.equal(cfg.intervalFor('turbo'), cfg.intervalFor('pro'));
-  assert.notEqual(cfg.intervalFor('turbo'), cfg.intervalFor('free'));
-  assert.equal(cfg.searchLimitFor('turbo'), cfg.searchLimitFor('pro'));
+test('every plan has its own polling and limits, none falls back to free', () => {
+  // intervalFor() lands on free for an unknown plan, which would quietly make a
+  // paid tier the slowest of all
+  for (const plan of cfg.PLANS.filter((p) => p !== 'free')) {
+    assert.ok(cfg.intervalFor(plan) <= cfg.intervalFor('free'), `${plan} polls slower than free`);
+    assert.ok(cfg.searchLimitFor(plan) > cfg.searchLimitFor('free'), `${plan} has free's link limit`);
+  }
+  // and the ladder never goes backwards
+  for (const [i, plan] of cfg.PLANS.entries()) {
+    if (i === 0) continue;
+    const below = cfg.PLANS[i - 1];
+    assert.ok(cfg.intervalFor(plan) <= cfg.intervalFor(below), `${plan} polls slower than ${below}`);
+    assert.ok(cfg.burstFor(plan) >= cfg.burstFor(below), `${plan} delivers slower than ${below}`);
+    assert.ok(cfg.searchLimitFor(plan) >= cfg.searchLimitFor(below), `${plan} allows fewer links than ${below}`);
+  }
 });
 
 test('an unknown plan still lands on free, not on undefined', () => {
@@ -912,15 +1022,23 @@ async function drive(update, fromId) {
   return calls;
 }
 
-const from = (id) => ({ id, is_bot: false, first_name: 'A', username: 'admin', language_code: 'ru' });
+// the bot syncs the username from every update, so the harness has to carry a
+// real one per account — otherwise a test about who wrote in proves nothing
+const from = (id, username = 'admin') => ({
+  id,
+  is_bot: false,
+  first_name: 'A',
+  username,
+  language_code: 'ru',
+});
 
-const textUpdate = (text, fromId, entities) => ({
+const textUpdate = (text, fromId, entities, username) => ({
   update_id: Math.floor(Math.random() * 1e6),
   message: {
     message_id: 1,
     date: Math.floor(Date.now() / 1000),
     chat: { id: fromId, type: 'private' },
-    from: from(fromId),
+    from: from(fromId, username),
     text,
     ...(entities ? { entities } : {}),
   },
@@ -1214,6 +1332,45 @@ await (async () => {
     assert.match(edit.payload.text, /\[ URL \]/, 'the mockup is the fallback and must stay');
   });
 
+  /* ------------------ editing a link from the list --------------------- */
+
+  const owned = store.insertSearch.run({
+    user_id: UID, name: 'Raf', url: parsed.normalizedUrl, domain: parsed.domain,
+    canonical_key: parsed.canonicalKey, api_query: JSON.stringify(parsed.query),
+    dest_chat_id: UID, dest_thread_id: null, next_run_at: 0, created_at: store.now(),
+  }).lastInsertRowid;
+
+  const opened = await drive(pressUpdate(`s:open:${owned}`, UID), UID);
+  test('tapping a link opens its edit actions in one step', () => {
+    const edit = opened.find((c) => c.method === 'editMessageText');
+    const actions = edit.payload.reply_markup.inline_keyboard.flat().map((b) => b.callback_data ?? b.url);
+    for (const action of ['s:toggle', 's:rename', 's:dest', 's:del']) {
+      assert.ok(
+        actions.some((a) => String(a).startsWith(action)),
+        `${action} missing — editing must not need another screen`,
+      );
+    }
+  });
+
+  const picker = await drive(pressUpdate(`s:dest:${owned}`, UID), UID);
+  test('changing the destination reuses the picker from creation', () => {
+    const edit = picker.find((c) => c.method === 'editMessageText');
+    const actions = edit.payload.reply_markup.inline_keyboard.flat().map((b) => b.callback_data);
+    assert.ok(actions.includes('dest:private'), 'the same destinations are offered');
+  });
+
+  const before = store.getSearch.get(owned).dest_chat_id;
+  const moved = await drive(pressUpdate('dest:private', UID), UID);
+  test('picking a destination moves the search instead of creating one', () => {
+    const after = store.getSearch.get(owned);
+    assert.equal(after.dest_chat_id, UID);
+    assert.equal(store.listSearches.all(UID).length, 1, 'no second search may appear');
+    const edit = moved.find((c) => c.method === 'editMessageText');
+    assert.match(edit.payload.text, /Raf/, 'and the user is told where it goes now');
+    assert.ok(before !== undefined);
+  });
+  store.deleteSearch.run(owned, UID);
+
   const typedLabel = await drive(textUpdate(LOCALES.ru['btn.add'], UID), UID);
   test('the old button captions are just text now, they start nothing', () => {
     const reply = typedLabel.find((c) => c.method === 'sendMessage');
@@ -1270,7 +1427,7 @@ await (async () => {
     assert.match(info, /4242/);
     assert.match(info, /Raf &lt;script&gt;/, 'search names are escaped too');
     assert.match(info, /отправлено 5/);
-    assert.match(info, /Тариф: Free/);
+    assert.match(info, new RegExp(LOCALES.ru['plan.name.free']), 'the plan name comes from the locale');
   });
 
   const noArg = await runCommand('/userinfo', 1);
@@ -1280,27 +1437,129 @@ await (async () => {
     assert.match(unknown, /не найден/);
   });
 
-  const granted = await runCommand('/grant 4242 turbo 30', 1);
-  test('turbo is handed out by /grant and nothing else', () => {
-    assert.match(granted, /turbo/);
-    assert.equal(store.getUser(4242).plan, 'turbo');
-    assert.equal(cfg.intervalFor(store.effectivePlan(store.getUser(4242))), cfg.intervalFor('pro'));
+  /* --------------------------- support relay --------------------------- */
+
+  const SUPPORT = 9001;
+  const USER = 9002;
+  store.upsertUser(SUPPORT, 'helper', 'en');
+  store.upsertUser(USER, 'asker', 'ru');
+  cfg.config.supportId = SUPPORT;
+
+  await drive(
+    textUpdate('/support', USER, [{ type: 'bot_command', offset: 0, length: 8 }], 'asker'),
+    USER,
+  );
+  const asked = await drive(textUpdate('фото не приходят', USER, undefined, 'asker'), USER);
+  const forwarded = asked.find((c) => c.method === 'sendMessage' && c.payload.chat_id === SUPPORT);
+
+  test('a support message reaches the support contact with who sent it', () => {
+    assert.ok(forwarded, 'the message must be passed on');
+    assert.match(forwarded.payload.text, /фото не приходят/);
+    assert.match(forwarded.payload.text, /@asker/, 'the username travels with it');
+    assert.match(forwarded.payload.text, new RegExp(String(USER)), 'and the id, for a lookup');
+    assert.ok(
+      asked.some((c) => c.method === 'sendMessage' && c.payload.chat_id === USER),
+      'and the user is told it went through',
+    );
+  });
+
+  test('the relay remembers where an answer has to go', () => {
+    assert.equal(store.support.userFor(1), USER, 'keyed by the message the support sees');
+  });
+
+  const answered = await drive(
+    {
+      update_id: Math.floor(Math.random() * 1e6),
+      message: {
+        message_id: 77,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: SUPPORT, type: 'private' },
+        from: { id: SUPPORT, is_bot: false, first_name: 'S', username: 'helper', language_code: 'en' },
+        text: 'проверь настройки темы',
+        reply_to_message: { message_id: 1, date: 0, chat: { id: SUPPORT, type: 'private' }, text: 'req' },
+      },
+    },
+    SUPPORT,
+  );
+
+  test('an answer comes back to the user who asked', () => {
+    const back = answered.find((c) => c.method === 'sendMessage' && c.payload.chat_id === USER);
+    assert.ok(back, 'the reply must reach the original user');
+    assert.match(back.payload.text, /проверь настройки темы/);
+    assert.match(back.payload.text, /💬/, 'and be marked as coming from support');
+  });
+
+  const strayReply = await drive(
+    {
+      update_id: Math.floor(Math.random() * 1e6),
+      message: {
+        message_id: 78,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: SUPPORT, type: 'private' },
+        from: { id: SUPPORT, is_bot: false, first_name: 'S', username: 'helper', language_code: 'en' },
+        text: 'кому это?',
+        reply_to_message: { message_id: 4242, date: 0, chat: { id: SUPPORT, type: 'private' }, text: 'x' },
+      },
+    },
+    SUPPORT,
+  );
+
+  test('a reply to something unknown is reported, not sent to a stranger', () => {
+    const replies = strayReply.filter((c) => c.method === 'sendMessage');
+    assert.ok(replies.every((c) => c.payload.chat_id === SUPPORT), 'nothing may leak to another chat');
+    assert.match(replies[0].payload.text, /reply to the request/i);
+  });
+
+  cfg.config.supportId = 0;
+  const noSupport = await drive(pressUpdate('m:support', USER), USER);
+  test('with no support contact configured the flow says so', () => {
+    const edit = noSupport.find((c) => c.method === 'editMessageText');
+    assert.match(edit.payload.text, /unavailable|недоступна/i);
+  });
+  cfg.config.supportId = SUPPORT;
+
+  const granted = await runCommand('/grant 4242 elite_max 30', 1);
+  test('the reserved tier is handed out by /grant and nothing else', () => {
+    assert.match(granted, /elite_max/);
+    assert.equal(store.getUser(4242).plan, 'elite_max');
+    assert.equal(
+      cfg.intervalFor(store.effectivePlan(store.getUser(4242))),
+      cfg.intervalFor('elite_max'),
+    );
   });
 
   const planScreen = await drive(pressUpdate('m:plan', 4242), 4242);
-  test('the plan screen shows the delivery speed and sells only public tiers', () => {
+  const planLang = store.getUser(4242).lang; // this account is not on the default language
+  test('the plan screen names every public tier and hides the reserved one', () => {
     const edit = planScreen.find((c) => c.method === 'editMessageText');
-    assert.match(edit.payload.text, /Turbo/, 'the holder sees what they have');
-    assert.match(edit.payload.text, new RegExp(String(cfg.burstFor('turbo'))), 'and their delivery speed');
-    assert.ok(!/Turbo/.test(edit.payload.text.split('\n').at(-1)), 'the tier line must not advertise it');
+    for (const tier of cfg.PUBLIC_PLANS) {
+      assert.match(edit.payload.text, new RegExp(LOCALES[planLang][`plan.name.${tier}`]), `${tier} missing`);
+    }
+    // the holder does see their own plan in the header — what must never leak
+    // is a row for it in the comparison everyone reads
+    const body = edit.payload.text.split(LOCALES[planLang]['plan.tiersHeader'])[1] ?? '';
+    assert.ok(body.length, 'the comparison section must exist');
+    assert.ok(
+      !body.includes(LOCALES[planLang]['plan.name.elite_max']),
+      `the reserved tier leaked into the comparison:\n${body}`,
+    );
     const buttons = (edit.payload.reply_markup?.inline_keyboard ?? []).flat();
-    assert.ok(!buttons.some((b) => /turbo/i.test(b.callback_data ?? '')), 'and there is no way to buy it');
+    assert.ok(!buttons.some((b) => /elite_max/.test(b.callback_data ?? '')), 'and cannot be bought');
+  });
+
+  test('the comparison carries prices and the scarcity line', () => {
+    const edit = planScreen.find((c) => c.method === 'editMessageText');
+    assert.match(edit.payload.text, /\$9/, 'Hunter price');
+    assert.match(edit.payload.text, /\$19/, 'Ranger price');
+    assert.match(edit.payload.text, /\$79/, 'Sniper Elite price');
+    assert.ok(edit.payload.text.includes('Sniper Elite'), 'scarcity names the tier it pushes');
+    assert.match(edit.payload.text, /🔥/, 'the scarcity line is there');
   });
 
   const rejected = await runCommand('/grant 4242 platinum 30', 1);
   test('/grant refuses a plan that does not exist', () => {
     assert.match(rejected, /Usage/);
-    assert.equal(store.getUser(4242).plan, 'turbo', 'the account is left alone');
+    assert.equal(store.getUser(4242).plan, 'elite_max', 'the account is left alone');
   });
   store.setPlan.run('free', null, 4242);
 

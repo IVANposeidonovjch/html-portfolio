@@ -1,5 +1,7 @@
 import { Bot, GrammyError, InlineKeyboard } from 'grammy';
-import { PLANS, SELLABLE_PLANS, burstFor, config, intervalFor, searchLimitFor } from '../config.js';
+import {
+  PLANS, PUBLIC_PLANS, SELLABLE_PLANS, burstFor, config, intervalFor, searchLimitFor, starsFor, usdFor,
+} from '../config.js';
 import * as store from '../db/index.js';
 import { LANGS, isLang, resolveLang, t } from '../i18n/index.js';
 import { logger } from '../util/logger.js';
@@ -44,7 +46,16 @@ async function replyLines(ctx, lines, limit = 3500) {
     await ctx.reply(buffer, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
   }
 }
-const planLabel = { free: 'Free', basic: 'Basic', pro: 'Pro ⚡', turbo: 'Turbo 🚀' };
+/** Plan names are product copy, so they live in the locales like everything else. */
+const planName = (lang, plan) => t(lang, `plan.name.${plan}`);
+const priceTag = (plan) => (usdFor(plan) ? `$${usdFor(plan)}` : '$0');
+
+/**
+ * What this account may actually hold: the plan's allowance plus any links
+ * bought on top of it. Add-ons ride on a paid plan and are cleared with it.
+ */
+const linkLimit = (user, plan) =>
+  searchLimitFor(plan) + (plan === 'free' ? 0 : user.extra_links || 0);
 
 /** Register the user on first contact, seeding the language from Telegram. */
 function who(ctx) {
@@ -114,6 +125,26 @@ export function createBot() {
     await next();
   });
 
+  /**
+   * /support is a two-way relay, not a ticket system: the user writes, the
+   * message reaches whoever answers, and a reply to it comes back. This handler
+   * sits ahead of everything else so an answer is never mistaken for a command.
+   */
+  bot.chatType('private').on('message:text', async (ctx, next) => {
+    if (!config.supportId || ctx.from.id !== config.supportId) return next();
+    const replyTo = ctx.msg.reply_to_message?.message_id;
+    if (!replyTo) return next();
+
+    const userId = store.support.userFor(replyTo);
+    if (!userId) return ctx.reply(t(store.getUser(ctx.from.id)?.lang || 'en', 'support.lost'));
+
+    const target = store.getUser(userId);
+    await ctx.api.sendMessage(userId, t(target?.lang || 'en', 'support.replied', { text: ctx.msg.text }), {
+      parse_mode: 'HTML',
+    });
+    await ctx.reply(t(store.getUser(ctx.from.id)?.lang || 'en', 'support.delivered'));
+  });
+
   /* ---------------------------- private: start --------------------------- */
 
   bot.chatType('private').command('start', async (ctx) => {
@@ -159,6 +190,8 @@ export function createBot() {
     });
   }
 
+  const supportOpt = { support: !!config.supportId };
+
   /** Help doubles as the second level: plan, language and chats live here. */
   async function showHelp(ctx) {
     const { lang } = who(ctx);
@@ -167,7 +200,7 @@ export function createBot() {
 
     // No picture: one message, mockup inside, buttons under it.
     if (!demo) {
-      return render(ctx, helpText(lang, false), { ...html, reply_markup: helpKb(lang) });
+      return render(ctx, helpText(lang, false), { ...html, reply_markup: helpKb(lang, supportOpt) });
     }
 
     // With a picture the example becomes a real alert, so the text has to open
@@ -192,7 +225,7 @@ export function createBot() {
     // If the photo could not be sent, the written mockup stands in for it —
     // better a described example than a pointer at nothing.
     const tail = shown ? rest : `${t(lang, 'help.example')}\n\n${rest}`;
-    await ctx.api.sendMessage(ctx.chat.id, tail, { ...html, reply_markup: helpKb(lang) });
+    await ctx.api.sendMessage(ctx.chat.id, tail, { ...html, reply_markup: helpKb(lang, supportOpt) });
   }
 
   bot.chatType('private').command('help', showHelp);
@@ -204,6 +237,39 @@ export function createBot() {
     await ctx.answerCallbackQuery();
     await showHelp(ctx);
   });
+
+  const askSupport = async (ctx) => {
+    const { lang } = who(ctx);
+    if (!config.supportId) return render(ctx, t(lang, 'support.off'), { reply_markup: menuOnlyKb(lang) });
+    setFlow(ctx.from.id, { step: 'support' });
+    return render(ctx, t(lang, 'support.ask'), { reply_markup: cancelKb(lang) });
+  };
+
+  bot.chatType('private').command('support', askSupport);
+  bot.callbackQuery('m:support', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await askSupport(ctx);
+  });
+
+  /** Pass one message on, and remember where the answer has to come back to. */
+  async function relayToSupport(ctx, lang, text) {
+    const { user } = who(ctx);
+    const plan = store.effectivePlan(user);
+    const sent = await ctx.api.sendMessage(
+      config.supportId,
+      t(lang, 'support.from', {
+        who: user.username ? `@${esc(user.username)}` : esc(ctx.from.first_name || '—'),
+        id: user.tg_id,
+        lang: user.lang,
+        plan: planName('en', plan),
+        text: esc(text),
+      }),
+      { parse_mode: 'HTML' },
+    );
+    store.support.remember(sent.message_id, user.tg_id);
+    flows.delete(ctx.from.id);
+    await ctx.reply(t(lang, 'support.sent'), { reply_markup: menuOnlyKb(lang) });
+  }
 
   /* ------------------------------- language ------------------------------ */
 
@@ -334,9 +400,9 @@ export function createBot() {
   const startAdd = async (ctx) => {
     const { user, lang } = who(ctx);
     const plan = store.effectivePlan(user);
-    const limit = searchLimitFor(plan);
+    const limit = linkLimit(user, plan);
     if (store.countSearches.get(user.tg_id).n >= limit) {
-      return render(ctx, t(lang, 'add.limit', { plan: planLabel[plan], limit }), {
+      return render(ctx, t(lang, 'add.limit', { plan: planName(lang, plan), limit }), {
         reply_markup: menuOnlyKb(lang),
       });
     }
@@ -353,6 +419,23 @@ export function createBot() {
     await ctx.answerCallbackQuery();
     await startAdd(ctx);
   });
+
+  /**
+   * A destination was picked. For a draft that means a new search; for a search
+   * being redirected it means moving it — same picker, one place to decide.
+   */
+  function applyDestination(ownerId, lang, flow, chatId, threadId) {
+    if (flow.redirectId) {
+      store.redirectSearch.run(chatId, threadId, flow.redirectId, ownerId);
+      flows.delete(ownerId);
+      const moved = store.getSearch.get(flow.redirectId);
+      return t(lang, 'search.destChanged', {
+        name: moved.name,
+        dest: destinationTitle(moved, ownerId, lang),
+      });
+    }
+    return createSearch(ownerId, lang, flow, chatId, threadId);
+  }
 
   /** Store the search and tell the user what happens next. */
   function createSearch(ownerId, lang, flow, chatId, threadId) {
@@ -384,10 +467,10 @@ export function createBot() {
     const plan = store.effectivePlan(user);
     const header = t(lang, 'list.header', {
       count: searches.length,
-      limit: searchLimitFor(plan),
+      limit: linkLimit(user, plan),
       state: t(lang, user.monitoring_enabled ? 'state.on' : 'state.off'),
       seconds: intervalFor(plan),
-      plan: planLabel[plan],
+      plan: planName(lang, plan),
     });
     return render(ctx, header, { parse_mode: 'HTML', reply_markup: searchListKb(lang, searches) });
   };
@@ -450,6 +533,23 @@ export function createBot() {
     setFlow(ctx.from.id, { step: 'rename', searchId: search.id });
     await ctx.answerCallbackQuery();
     await ctx.reply(t(lang, 'rename.ask', { name: search.name }), { reply_markup: cancelKb(lang) });
+  });
+
+  /**
+   * Change where an existing search posts. The picker is the one used when a
+   * search is created — same screens, same topic creation — with the flow
+   * carrying a search id instead of a draft.
+   */
+  bot.callbackQuery(/^s:dest:(\d+)$/, async (ctx) => {
+    const { lang } = who(ctx);
+    const search = store.getSearch.get(Number(ctx.match[1]));
+    await ctx.answerCallbackQuery();
+    if (!search || search.user_id !== ctx.from.id) return;
+    setFlow(ctx.from.id, { step: 'dest', redirectId: search.id, name: search.name });
+    const chats = store.listChats.all(ctx.from.id);
+    await safeEdit(ctx, t(lang, 'add.askDest'), {
+      reply_markup: destinationKb(lang, chats, topicsByChat(chats)),
+    });
   });
 
   bot.callbackQuery(/^s:del:(\d+)$/, async (ctx) => {
@@ -531,31 +631,50 @@ export function createBot() {
   const showPlan = async (ctx) => {
     const { user, lang } = who(ctx);
     const plan = store.effectivePlan(user);
+    const addon = config.payments.addon;
+
     const lines = [
-      t(lang, 'plan.title', { plan: planLabel[plan] }),
+      t(lang, 'plan.title', { plan: planName(lang, plan) }),
       t(lang, 'plan.interval', { seconds: intervalFor(plan) }),
-      t(lang, 'plan.limit', { limit: searchLimitFor(plan) }),
+      t(lang, 'plan.limit', { limit: linkLimit(user, plan) }),
       t(lang, 'plan.used', { count: store.countSearches.get(user.tg_id).n }),
+      t(lang, 'plan.burst', { count: burstFor(plan) }),
     ];
+    if (user.extra_links && plan !== 'free') {
+      lines.push(t(lang, 'plan.addon', { count: user.extra_links }));
+    }
     if (user.plan_until && plan !== 'free') {
       lines.push(t(lang, 'plan.until', { date: new Date(user.plan_until * 1000).toISOString().slice(0, 10) }));
     }
-    lines.push(t(lang, 'plan.burst', { count: burstFor(plan) }));
-    lines.push(
-      '',
-      t(lang, 'plan.tiers', {
-        free: intervalFor('free'),
-        basic: intervalFor('basic'),
-        pro: intervalFor('pro'),
-      }),
-    );
+
+    // The comparison lists what is for sale. The reserved tier is not in
+    // PUBLIC_PLANS, so it cannot leak into it by anyone adding a line here.
+    lines.push('', t(lang, 'plan.tiersHeader'));
+    for (const tier of PUBLIC_PLANS) {
+      lines.push(
+        (tier === plan ? '▸ ' : '') +
+          t(lang, 'plan.tierRow', {
+            name: planName(lang, tier),
+            price: priceTag(tier),
+            interval: intervalFor(tier),
+            links: searchLimitFor(tier),
+            burst: burstFor(tier),
+          }),
+      );
+    }
+    lines.push('', t(lang, 'plan.scarcity'));
+    if (addon.stars) {
+      lines.push(t(lang, 'plan.addonOffer', { links: addon.links, price: `$${addon.usd}` }));
+    }
+
     const kb = new InlineKeyboard();
-    if (config.payments.basicStars) kb.text(`Basic · ${config.payments.basicStars} ⭐`, 'buy:basic');
-    if (config.payments.proStars) kb.text(`Pro · ${config.payments.proStars} ⭐`, 'buy:pro');
-    await render(ctx, lines.join('\n'), {
-      parse_mode: 'HTML',
-      reply_markup: backRow(kb, lang),
-    });
+    for (const tier of SELLABLE_PLANS) {
+      if (starsFor(tier)) kb.text(`${planName(lang, tier)} · ${starsFor(tier)} ⭐`, `buy:${tier}`).row();
+    }
+    if (addon.stars) {
+      kb.text(t(lang, 'btn.addon', { links: addon.links, stars: addon.stars }), 'buy:addon').row();
+    }
+    await render(ctx, lines.join('\n'), { parse_mode: 'HTML', reply_markup: backRow(kb, lang) });
   };
 
   bot.chatType('private').command('plan', showPlan);
@@ -564,23 +683,42 @@ export function createBot() {
     await showPlan(ctx);
   });
 
-  bot.callbackQuery(/^buy:(basic|pro)$/, async (ctx) => {
-    const { lang } = who(ctx);
-    const plan = ctx.match[1];
-    const stars = plan === 'pro' ? config.payments.proStars : config.payments.basicStars;
+  bot.callbackQuery(/^buy:(\w+)$/, async (ctx) => {
+    const { user, lang } = who(ctx);
+    const what = ctx.match[1];
     await ctx.answerCallbackQuery();
-    if (!stars) return;
+
+    if (what === 'addon') {
+      const addon = config.payments.addon;
+      if (!addon.stars) return;
+      // extra links sit on top of a plan; on free there is nothing to sit on
+      if (store.effectivePlan(user) === 'free') {
+        return ctx.reply(t(lang, 'addon.needPlan'));
+      }
+      return ctx.api.sendInvoice(
+        ctx.chat.id,
+        t(lang, 'btn.addon', { links: addon.links, stars: addon.stars }),
+        t(lang, 'plan.addonOffer', { links: addon.links, price: `$${addon.usd}` }),
+        'addon:links',
+        'XTR',
+        [{ label: `+${addon.links}`, amount: addon.stars }],
+      );
+    }
+
+    // Only what is on sale: the reserved tier has no price and no button, and
+    // a hand-crafted callback for it must not open an invoice either.
+    if (!SELLABLE_PLANS.includes(what) || !starsFor(what)) return;
     await ctx.api.sendInvoice(
       ctx.chat.id,
-      `Vinted Monitor ${planLabel[plan]}`,
+      `Vinted Monitor ${planName(lang, what)}`,
       t(lang, 'plan.invoiceDesc', {
         days: config.payments.planDays,
-        seconds: intervalFor(plan),
-        limit: searchLimitFor(plan),
+        seconds: intervalFor(what),
+        limit: searchLimitFor(what),
       }),
-      `plan:${plan}`,
+      `plan:${what}`,
       'XTR',
-      [{ label: planLabel[plan], amount: stars }],
+      [{ label: planName(lang, what), amount: starsFor(what) }],
     );
   });
 
@@ -588,11 +726,24 @@ export function createBot() {
 
   bot.on('message:successful_payment', async (ctx) => {
     const { user, lang } = who(ctx);
-    const plan = ctx.msg.successful_payment.invoice_payload.split(':')[1];
-    if (!['basic', 'pro'].includes(plan)) return;
+    const [kind, what] = ctx.msg.successful_payment.invoice_payload.split(':');
+
+    if (kind === 'addon') {
+      const addon = config.payments.addon;
+      store.addExtraLinks.run(addon.links, user.tg_id);
+      const fresh = store.getUser(user.tg_id);
+      return ctx.reply(
+        t(lang, 'addon.bought', {
+          links: addon.links,
+          total: linkLimit(fresh, store.effectivePlan(fresh)),
+        }),
+      );
+    }
+
+    if (kind !== 'plan' || !SELLABLE_PLANS.includes(what)) return;
     const base = Math.max(store.now(), user.plan_until || 0);
-    store.setPlan.run(plan, base + config.payments.planDays * 86400, user.tg_id);
-    await ctx.reply(t(lang, 'pay.ok', { plan: planLabel[plan], days: config.payments.planDays }));
+    store.setPlan.run(what, base + config.payments.planDays * 86400, user.tg_id);
+    await ctx.reply(t(lang, 'pay.ok', { plan: planName(lang, what), days: config.payments.planDays }));
   });
 
   /* -------------------------------- admin -------------------------------- */
@@ -606,6 +757,8 @@ export function createBot() {
     store.upsertUser(Number(id), null);
     const until = plan === 'free' ? null : store.now() + (Number(days) || 30) * 86400;
     store.setPlan.run(plan, until, Number(id));
+    // a hand-assigned plan starts clean: bought links belonged to the old one
+    store.resetExtraLinks.run(Number(id));
     await ctx.reply(`OK: ${id} → ${plan}${until ? ` until ${new Date(until * 1000).toISOString().slice(0, 10)}` : ''}`);
   });
 
@@ -624,7 +777,7 @@ export function createBot() {
       const expired = row.plan !== 'free' && plan === 'free';
       lines.push(
         `<code>${row.tg_id}</code> ${row.username ? '@' + esc(row.username) : '—'} · ` +
-          `${planLabel[plan]}${expired ? ` (был ${planLabel[row.plan]}, истёк)` : ''} · ` +
+          `${planName('ru', plan)}${expired ? ` (был ${planName('ru', row.plan)}, истёк)` : ''} · ` +
           `ссылок ${row.active}/${row.total} · отправлено ${row.sent} · ${row.lang}` +
           `${row.monitoring_enabled ? '' : ' · ⏸ мониторинг выключен'}`,
       );
@@ -648,10 +801,10 @@ export function createBot() {
     const searches = store.listSearches.all(targetId);
     const lines = [
       `<b>${targetId}</b> ${target.username ? '@' + esc(target.username) : '(без username)'}`,
-      `Тариф: ${planLabel[plan]}` +
+      `Тариф: ${planName('ru', plan)}` +
         (target.plan_until ? ` · до ${new Date(target.plan_until * 1000).toISOString().slice(0, 10)}` : '') +
         ` · язык ${target.lang} · мониторинг ${target.monitoring_enabled ? '🟢' : '🔴'}`,
-      `Ссылок: ${searches.length}/${searchLimitFor(plan)}` +
+      `Ссылок: ${searches.length}/${linkLimit(target, plan)}` +
         ` · активных ${searches.filter((s) => s.enabled).length}` +
         ` · отправлено ${searches.reduce((n, s) => n + s.sent_count, 0)}`,
       `Зарегистрирован: ${new Date(target.created_at * 1000).toISOString().slice(0, 10)}`,
@@ -788,8 +941,8 @@ export function createBot() {
     }
 
     store.upsertTopic.run(chat.id, topic.message_thread_id, flow.name, store.now());
-    const created = createSearch(ctx.from.id, lang, flow, chat.tg_chat_id, topic.message_thread_id);
-    await ctx.editMessageText(`${t(lang, 'topic.created', { name: flow.name })}\n\n${created}`);
+    const done = applyDestination(ctx.from.id, lang, flow, chat.tg_chat_id, topic.message_thread_id);
+    await ctx.editMessageText(`${t(lang, 'topic.created', { name: flow.name })}\n\n${done}`);
   });
 
   bot.callbackQuery(/^dest:(private|chat:\d+|topic:\d+)$/, async (ctx) => {
@@ -815,7 +968,9 @@ export function createBot() {
       threadId = topic.thread_id;
     }
 
-    await ctx.editMessageText(createSearch(ctx.from.id, lang, flow, chatId, threadId));
+    await ctx.editMessageText(applyDestination(ctx.from.id, lang, flow, chatId, threadId), {
+      reply_markup: menuOnlyKb(lang),
+    });
   });
 
   /* ----------------------------- text router ----------------------------- */
@@ -834,6 +989,8 @@ export function createBot() {
         reply_markup: mainMenu(lang, { monitoring: !!store.getUser(ctx.from.id).monitoring_enabled }),
       });
     }
+
+    if (flow.step === 'support') return relayToSupport(ctx, lang, text);
 
     if (flow.step === 'url') return handleUrl(ctx, lang, text);
 

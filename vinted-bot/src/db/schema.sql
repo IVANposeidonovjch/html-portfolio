@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS users (
   username           TEXT,
   lang               TEXT    NOT NULL DEFAULT 'en',
   kb_cleared         INTEGER NOT NULL DEFAULT 1,   -- fresh users never saw the old reply keyboard
+  extra_links        INTEGER NOT NULL DEFAULT 0,   -- add-on capacity, lost when the plan lapses
+  last_fomo_nudge_at INTEGER,
   plan               TEXT    NOT NULL DEFAULT 'free',   -- free | basic | pro
   plan_until         INTEGER,                            -- unix seconds, NULL = unlimited (free)
   monitoring_enabled INTEGER NOT NULL DEFAULT 1,
@@ -71,6 +73,14 @@ CREATE TABLE IF NOT EXISTS sent_destinations (
   item_id  INTEGER NOT NULL,
   sent_at  INTEGER NOT NULL,
   PRIMARY KEY (dest_key, item_id)
+);
+
+-- /support is a two-way relay: remember which forwarded message belongs to whom
+-- so a reply in the support chat finds its way back to the user who wrote in.
+CREATE TABLE IF NOT EXISTS support_relays (
+  support_msg_id INTEGER PRIMARY KEY,
+  user_id        INTEGER NOT NULL,
+  created_at     INTEGER NOT NULL
 );
 
 -- Small key/value store for things the admin sets at runtime (image paths, ...)

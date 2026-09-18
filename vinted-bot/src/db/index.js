@@ -17,6 +17,8 @@ for (const [table, column, ddl] of [
   // 0 for rows that already existed: those clients still show the old
   // persistent keyboard, and it has to be taken away from them once.
   ['users', 'kb_cleared', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'extra_links', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'last_fomo_nudge_at', 'INTEGER'],
 ]) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
@@ -31,15 +33,36 @@ const insertUser = db.prepare(
    ON CONFLICT(tg_id) DO UPDATE SET username = excluded.username`,
 );
 const selectUser = db.prepare('SELECT * FROM users WHERE tg_id = ?');
+const lapsePlan = db.prepare(
+  "UPDATE users SET plan = 'free', plan_until = NULL, extra_links = 0 WHERE tg_id = ?",
+);
+
+/**
+ * Read a user, retiring a plan whose paid period has run out.
+ *
+ * Doing it lazily on read keeps one definition of "what this account is right
+ * now" — and it is also where bought extra links go, since they are sold on top
+ * of a plan and cannot outlive it.
+ */
+function readUser(tgId) {
+  const user = selectUser.get(tgId);
+  if (!user) return user;
+  const lapsed = user.plan_until && user.plan_until < now();
+  if (lapsed && (user.plan !== 'free' || user.extra_links)) {
+    lapsePlan.run(tgId);
+    return selectUser.get(tgId);
+  }
+  return user;
+}
 
 export function upsertUser(tgId, username, lang = 'en') {
   insertUser.run(tgId, username || null, lang, now());
-  return selectUser.get(tgId);
+  return readUser(tgId);
 }
 
 export const setLang = db.prepare('UPDATE users SET lang = ? WHERE tg_id = ?');
 export const markKbCleared = db.prepare('UPDATE users SET kb_cleared = 1 WHERE tg_id = ?');
-export const getUser = (tgId) => selectUser.get(tgId);
+export const getUser = (tgId) => readUser(tgId);
 
 export function effectivePlan(user) {
   if (!user) return 'free';
@@ -49,6 +72,13 @@ export function effectivePlan(user) {
 }
 
 export const setPlan = db.prepare('UPDATE users SET plan = ?, plan_until = ? WHERE tg_id = ?');
+
+/** Add-ons are tied to the plan that was active when they were bought. */
+export const addExtraLinks = db.prepare(
+  'UPDATE users SET extra_links = extra_links + ? WHERE tg_id = ?',
+);
+export const resetExtraLinks = db.prepare('UPDATE users SET extra_links = 0 WHERE tg_id = ?');
+export const markFomoNudge = db.prepare('UPDATE users SET last_fomo_nudge_at = ? WHERE tg_id = ?');
 export const setMonitoring = db.prepare('UPDATE users SET monitoring_enabled = ? WHERE tg_id = ?');
 
 /* ------------------------------- chats -------------------------------- */
@@ -104,6 +134,9 @@ export const toggleSearch = db.prepare(
   'UPDATE searches SET enabled = ? WHERE id = ? AND user_id = ?',
 );
 export const renameSearch = db.prepare('UPDATE searches SET name = ? WHERE id = ? AND user_id = ?');
+export const redirectSearch = db.prepare(
+  'UPDATE searches SET dest_chat_id = ?, dest_thread_id = ? WHERE id = ? AND user_id = ?',
+);
 
 export const dueSearches = db.prepare(
   `SELECT s.* FROM searches s
@@ -163,6 +196,18 @@ export const cache = {
     return JSON.parse(row.payload);
   },
   set: (key, items) => putCache.run(key, now(), JSON.stringify(items)),
+};
+
+/* ------------------------------- support ------------------------------ */
+
+const insertRelay = db.prepare(
+  'INSERT OR REPLACE INTO support_relays (support_msg_id, user_id, created_at) VALUES (?, ?, ?)',
+);
+const selectRelay = db.prepare('SELECT user_id FROM support_relays WHERE support_msg_id = ?');
+
+export const support = {
+  remember: (supportMsgId, userId) => insertRelay.run(supportMsgId, userId, now()),
+  userFor: (supportMsgId) => selectRelay.get(supportMsgId)?.user_id ?? null,
 };
 
 /* ------------------------------- settings ----------------------------- */

@@ -16,6 +16,8 @@ export const config = {
     // turbo is not sold; without its own value it would fall back to free,
     // which would make the top tier the slowest one to poll
     turbo: num(process.env.INTERVAL_TURBO, num(process.env.INTERVAL_PRO, 60)),
+    // the reserved tier: never slower than the fastest thing on sale
+    elite_max: num(process.env.INTERVAL_ELITE_MAX, num(process.env.INTERVAL_TURBO, 30)),
   },
   jitterPct: num(process.env.JITTER_PCT, 20),
 
@@ -24,7 +26,10 @@ export const config = {
     basic: { searches: num(process.env.LIMIT_BASIC_SEARCHES, 25) },
     pro: { searches: num(process.env.LIMIT_PRO_SEARCHES, 100) },
     turbo: {
-      searches: num(process.env.LIMIT_TURBO_SEARCHES, num(process.env.LIMIT_PRO_SEARCHES, 100)),
+      searches: num(process.env.LIMIT_TURBO_SEARCHES, 300),
+    },
+    elite_max: {
+      searches: num(process.env.LIMIT_ELITE_MAX_SEARCHES, num(process.env.LIMIT_TURBO_SEARCHES, 1000)),
     },
     chats: num(process.env.LIMIT_CHATS, 20),
   },
@@ -63,6 +68,7 @@ export const config = {
       basic: num(process.env.BURST_BASIC, num(process.env.TELEGRAM_BURST, 10)),
       pro: num(process.env.BURST_PRO, 20),
       turbo: num(process.env.BURST_TURBO, 30),
+      elite_max: num(process.env.BURST_ELITE_MAX, 50),
     },
     // 0 means "whatever the chat type allows"; anything higher is clamped to it,
     // because the sustained rate belongs to Telegram, not to the price list
@@ -71,23 +77,60 @@ export const config = {
       basic: num(process.env.RATE_BASIC_PER_MIN, 0),
       pro: num(process.env.RATE_PRO_PER_MIN, 0),
       turbo: num(process.env.RATE_TURBO_PER_MIN, 0),
+      elite_max: num(process.env.RATE_ELITE_MAX_PER_MIN, 0),
     },
   },
 
   dedupePerDestination: bool(process.env.DEDUPE_PER_DESTINATION, true),
 
   payments: {
-    proStars: num(process.env.PRO_PRICE_STARS, 0),
-    basicStars: num(process.env.BASIC_PRICE_STARS, 0),
+    // Stars charged per plan, and the dollar figure shown in the comparison.
+    stars: {
+      basic: num(process.env.BASIC_PRICE_STARS, 0),
+      pro: num(process.env.PRO_PRICE_STARS, 0),
+      turbo: num(process.env.TURBO_PRICE_STARS, 0),
+    },
+    usd: {
+      free: num(process.env.PRICE_USD_FREE, 0),
+      basic: num(process.env.PRICE_USD_BASIC, 9),
+      pro: num(process.env.PRICE_USD_PRO, 19),
+      turbo: num(process.env.PRICE_USD_TURBO, 79),
+    },
     planDays: num(process.env.PLAN_DAYS, 30),
+
+    // Extra links, bought on top of any paid plan and lost when it lapses.
+    addon: {
+      links: num(process.env.ADDON_LINKS, 10),
+      stars: num(process.env.ADDON_PRICE_STARS, 0),
+      usd: num(process.env.ADDON_PRICE_USD, 2),
+    },
+  },
+
+  // Someone who answers /support. 0 disables the button entirely.
+  supportId: num(process.env.SUPPORT_TG_ID, 0),
+
+  // The near-miss note: how old a listing has to be on arrival before a
+  // slower plan is told what it cost them, and how rarely to mention it.
+  fomo: {
+    afterSeconds: num(process.env.FOMO_AFTER_SECONDS, 30),
+    everyHours: num(process.env.FOMO_EVERY_HOURS, 24),
   },
 
   logLevel: process.env.LOG_LEVEL || 'info',
 };
 
-/** Every plan that exists. `turbo` is never sold — only /grant hands it out. */
-export const PLANS = ['free', 'basic', 'pro', 'turbo'];
-export const SELLABLE_PLANS = ['basic', 'pro'];
+/**
+ * Every plan that exists, slowest first. Internal keys stay as they were so
+ * stored rows keep their meaning; the names people see live in the locales.
+ * `elite_max` is the reserved one: no price, no button, /grant only.
+ */
+export const PLANS = ['free', 'basic', 'pro', 'turbo', 'elite_max'];
+export const SELLABLE_PLANS = ['basic', 'pro', 'turbo'];
+export const PUBLIC_PLANS = ['free', ...SELLABLE_PLANS];
+export const isHiddenPlan = (plan) => !PUBLIC_PLANS.includes(plan);
+
+/** Plans that see listings fast enough that a near-miss note would be a lie. */
+export const INSTANT_PLANS = ['turbo', 'elite_max'];
 
 export function intervalFor(plan) {
   return config.intervals[plan] ?? config.intervals.free;
@@ -101,6 +144,9 @@ export function searchLimitFor(plan) {
 export function burstFor(plan) {
   return config.delivery.burst[plan] ?? config.telegram.burst;
 }
+
+export const starsFor = (plan) => config.payments.stars[plan] ?? 0;
+export const usdFor = (plan) => config.payments.usd[plan] ?? 0;
 
 /** 0 = leave the chat's own ceiling alone. */
 export function ratePerMinuteFor(plan) {

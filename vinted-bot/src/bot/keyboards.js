@@ -54,6 +54,7 @@ export function searchKb(lang, search) {
     .url(t(lang, 'kb.openSearch'), search.url).row()
     .text(t(lang, search.enabled ? 'kb.disable' : 'kb.enable'), `s:toggle:${search.id}`)
     .text(t(lang, 'kb.rename'), `s:rename:${search.id}`).row()
+    .text(t(lang, 'kb.changeDest'), `s:dest:${search.id}`).row()
     .text(t(lang, 'kb.delete'), `s:del:${search.id}`)
     .text(t(lang, 'kb.toList'), 's:list').row()
     .text(t(lang, 'kb.menu'), 'm:home');
@@ -86,13 +87,13 @@ export const langKb = (current) => {
  * so they sit behind Help instead of competing with the four things a user
  * actually does every day.
  */
-export const helpKb = (lang) =>
-  backRow(
-    new InlineKeyboard()
-      .text(t(lang, 'btn.plan'), 'm:plan').text(t(lang, 'btn.lang'), 'm:lang').row()
-      .text(t(lang, 'btn.chats'), 'm:chats').row(),
-    lang,
-  );
+export const helpKb = (lang, { support = false } = {}) => {
+  const kb = new InlineKeyboard()
+    .text(t(lang, 'btn.plan'), 'm:plan').text(t(lang, 'btn.lang'), 'm:lang').row()
+    .text(t(lang, 'btn.chats'), 'm:chats').row();
+  if (support) kb.text(t(lang, 'btn.support'), 'm:support').row();
+  return backRow(kb, lang);
+};
 
 /** Plan screen and other read-only views: just a way home. */
 export const menuOnlyKb = (lang) => backRow(new InlineKeyboard(), lang);

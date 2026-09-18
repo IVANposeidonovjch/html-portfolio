@@ -1,5 +1,6 @@
-import { burstFor, config, intervalFor, ratePerMinuteFor } from '../config.js';
+import { INSTANT_PLANS, burstFor, config, intervalFor, ratePerMinuteFor } from '../config.js';
 import * as store from '../db/index.js';
+import { t } from '../i18n/index.js';
 import { logger } from '../util/logger.js';
 import { jitter, sleep } from '../util/ratelimit.js';
 import { fetchCatalog, VintedError } from '../vinted/client.js';
@@ -113,6 +114,20 @@ export class Monitor {
     fresh.sort((a, b) => a.id - b.id);
 
     const dest = store.destKey(search.dest_chat_id, search.dest_thread_id);
+    // A near-miss note, at most once a day: what a slower plan actually costs,
+    // measured against this very listing rather than claimed in the abstract.
+    // Plans that already deliver instantly would be lying, so they never see it.
+    const nudge = (item) => {
+      if (!user || INSTANT_PLANS.includes(plan) || !item.uploadedAt) return null;
+      const age = store.now() - item.uploadedAt;
+      if (age < config.fomo.afterSeconds) return null;
+      const since = store.now() - (user.last_fomo_nudge_at || 0);
+      if (since < config.fomo.everyHours * 3600) return null;
+      store.markFomoNudge.run(store.now(), user.tg_id);
+      user.last_fomo_nudge_at = store.now(); // keep it to one per batch too
+      return t(user.lang || 'en', 'fomo.note', { seconds: age });
+    };
+
     let queued = 0;
     for (const item of fresh) {
       store.seen.add(search.id, item.id);
@@ -130,6 +145,7 @@ export class Monitor {
         // the plan decides how fast this chat may spend its Telegram allowance
         burst: burstFor(plan),
         perMinute: ratePerMinuteFor(plan),
+        note: nudge(item),
       });
       queued++;
     }

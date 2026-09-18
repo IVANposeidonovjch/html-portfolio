@@ -125,8 +125,11 @@ export class Sender {
   }
 
   async #send(job, lane, attempt = 0) {
-    const { chatId, threadId, item, searchName, lang } = job;
-    const caption = renderItem(item, searchName, lang);
+    const { chatId, threadId, item, searchName, lang, note } = job;
+    let caption = renderItem(item, searchName, lang);
+    // A photo caption stops at 1024 characters; the listing itself matters more
+    // than the note, so the note is only added when it fits.
+    if (note && caption.length + note.length + 2 <= 1024) caption = `${caption}\n\n${note}`;
     const opts = {
       parse_mode: 'HTML',
       reply_markup: itemKeyboard(item, lang),
