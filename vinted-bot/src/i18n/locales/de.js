@@ -215,8 +215,8 @@ Beispiel:
   'plan.next.same': '• dasselbe, aber {links} Links statt {currentLinks}',
 
   // what arrives when a tier is reached
-  'tier.welcome.basic': "🎯 <b>Hunter</b> freigeschaltet.\nJetzt {links} Links und alle {interval} s eine Prüfung. Platz für die Marken, die Größen und die Preisspanne, die du immer noch eintragen wolltest.",
-  'tier.welcome.pro': "🏹 <b>Ranger</b>.\nAlle {interval} s eine Prüfung, {links} Links, Schub {burst}. Treffer kommen im Paket statt im Tröpfchen. Das ist kein Hobby mehr.",
-  'tier.welcome.turbo': "🥷 <b>Sniper Elite</b>.\n{links} Links, Schub {burst} — das seltene Teil bekommt, wer es zuerst öffnet. Ab jetzt bist das du.\nEs gibt wenige Plätze auf dieser Stufe. Einer gehört dir.",
-  'tier.welcome.elite_max': "🔒 <b>Elite Max</b>.\nAlle {interval} s, {links} Links, Schub {burst}. Diese Stufe ist nicht käuflich.",
+  'tier.welcome.basic': "▬▬ι═══════ﺤ\n\nDie Jagd ist eröffnet, <b>Hunter</b>. 🎯 Jetzt {links} Links und alle {interval} s eine Prüfung — genug für die Marken, die Größen und die Preisspanne, die du ewig aufgeschoben hast.\nStell die Fallen 🪤 — den Rest übernehme ich.",
+  'tier.welcome.pro': "ᡕᠵデ气亠\n\nDu bist kampferprobt, <b>Ranger</b>, und liest das Feld auf einer anderen Ebene. ⚔️ Alle {interval} s eine Prüfung, {links} Links, Schub {burst} — Treffer kommen als Salve statt im Tröpfchen.\nDie anderen drücken noch F5. 😌",
+  'tier.welcome.turbo': "︻芫═───\n\nDu bist ein Elite-Scharfschütze — ein Ziel erkennen und holen liegt dir im Blut. 🥷 Willkommen auf der höchsten Stufe, <b>Sniper Elite</b>: {links} Links, Schub {burst}, alle {interval} s eine Prüfung.\nDas seltene Teil bekommt, wer es zuerst öffnet. Ab jetzt bist das du. 💎\nViel Spaß)",
+  'tier.welcome.elite_max': "▄︻デ══━一\n\nDiese Stufe stand nie auf der Preisliste, <b>Elite Max</b>. 🔒 Alle {interval} s, {links} Links, Schub {burst} — nichts Käufliches kommt da heran.\nSonst hat sie niemand. 🤫",
 };

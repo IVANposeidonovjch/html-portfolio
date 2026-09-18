@@ -16,7 +16,7 @@ Vinted search URL → Telegram group → Topic → новое объявлени
 ```bash
 cp .env.example .env         # вписать BOT_TOKEN от @BotFather и ADMIN_IDS
 npm install
-npm test                     # 113 офлайн-тестов логики
+npm test                     # 117 офлайн-тестов логики
 npm start
 ```
 

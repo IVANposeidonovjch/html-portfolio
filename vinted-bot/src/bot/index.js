@@ -1007,7 +1007,9 @@ export function createBot() {
     const { lang } = who(ctx);
     flows.delete(ctx.from.id);
     await ctx.answerCallbackQuery(t(lang, 'common.cancelled'));
-    await ctx.editMessageReplyMarkup();
+    // Cancelling used to strip the buttons and stop there, leaving a prompt
+    // nobody could act on. Backing out lands where backing out should: home.
+    await showHome(ctx);
   });
 
   bot.callbackQuery('dest:back', async (ctx) => {

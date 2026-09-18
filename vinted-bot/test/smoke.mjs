@@ -471,6 +471,55 @@ test('plan expiry falls back to free', () => {
   assert.equal(store.effectivePlan(store.getUser(1)), 'pro');
 });
 
+/* --------------------------- tier welcome copy --------------------------- */
+
+test('each tier welcome opens with its own glyph on its own line', () => {
+  const glyphs = new Set();
+  for (const lang of Object.keys(LOCALES)) {
+    for (const tier of ['basic', 'pro', 'turbo', 'elite_max']) {
+      const lines = LOCALES[lang][`tier.welcome.${tier}`].split('\n');
+      assert.ok(lines[0].trim().length, `${lang}/${tier}: no glyph line`);
+      assert.ok(!/[a-zA-Zа-яА-ЯёЁ]/.test(lines[0]), `${lang}/${tier}: the glyph line carries words`);
+      assert.equal(lines[1], '', `${lang}/${tier}: the glyph needs a blank line under it`);
+      assert.ok(lines.slice(2).join('').trim().length, `${lang}/${tier}: nothing below the glyph`);
+      if (lang === 'en') glyphs.add(lines[0]);
+    }
+  }
+  assert.equal(glyphs.size, 4, 'every tier needs its own glyph, not a shared one');
+});
+
+test('the welcome speaks in numbers the config really holds', () => {
+  for (const lang of Object.keys(LOCALES)) {
+    for (const tier of ['basic', 'pro', 'turbo', 'elite_max']) {
+      const text = t(lang, `tier.welcome.${tier}`, {
+        links: cfg.searchLimitFor(tier),
+        interval: cfg.intervalFor(tier),
+        burst: cfg.burstFor(tier),
+      });
+      assert.ok(!/\{\w+\}/.test(text), `${lang}/${tier}: an unfilled placeholder would reach a paying user`);
+      assert.ok(text.includes(String(cfg.searchLimitFor(tier))), `${lang}/${tier}: link count missing`);
+      assert.ok(text.includes(String(cfg.intervalFor(tier))), `${lang}/${tier}: interval missing`);
+      // it may travel as a photo caption, which stops at 1024
+      assert.ok(text.length <= 1024, `${lang}/${tier}: too long for a caption (${text.length})`);
+      for (const tag of new Set([...text.matchAll(/<\/?([a-z]+)/g)].map((m) => m[1]))) {
+        assert.ok(['b', 'i', 'u', 's', 'code', 'a'].includes(tag), `${lang}/${tier}: <${tag}> not allowed`);
+      }
+    }
+  }
+});
+
+test('each welcome names the tier it congratulates', () => {
+  for (const lang of Object.keys(LOCALES)) {
+    for (const tier of ['basic', 'pro', 'turbo', 'elite_max']) {
+      const name = LOCALES[lang][`plan.name.${tier}`].replace(/\s*🔒/, '');
+      assert.ok(
+        LOCALES[lang][`tier.welcome.${tier}`].includes(name),
+        `${lang}/${tier}: the copy never says which tier this is`,
+      );
+    }
+  }
+});
+
 /* --------------------------- next-tier pitch ----------------------------- */
 
 test('every public tier but the top one is told what the next one buys', () => {
@@ -1212,7 +1261,14 @@ await (async () => {
   });
 
   // leave the add wizard the way a user would, so later tests start clean
-  await drive(pressUpdate('cancel', UID), UID);
+  const cancelled = await drive(pressUpdate('cancel', UID), UID);
+  test('cancelling comes back to the menu, not to a dead end', () => {
+    const edit = cancelled.find((c) => c.method === 'editMessageText');
+    assert.ok(edit, 'the prompt must be replaced, not just stripped of buttons');
+    const actions = edit.payload.reply_markup?.inline_keyboard?.flat().map((b) => b.callback_data);
+    assert.ok(actions?.includes('m:add'), `no menu after cancelling: ${actions}`);
+    assert.ok(actions.includes('m:list') && actions.includes('m:help'), 'the full menu comes back');
+  });
 
   const textPress = await drive(pressUpdate('m:list', UID), UID);
   test('navigation from a text screen still edits in place', () => {

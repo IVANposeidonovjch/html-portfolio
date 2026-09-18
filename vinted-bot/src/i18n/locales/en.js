@@ -215,8 +215,8 @@ Example:
   'plan.next.same': '• the same, with {links} links instead of {currentLinks}',
 
   // what arrives when a tier is reached
-  'tier.welcome.basic': "🎯 <b>Hunter</b> unlocked.\n{links} links now, and a check every {interval}s. Room for the brands, the sizes and that price bracket you kept meaning to add.",
-  'tier.welcome.pro': "🏹 <b>Ranger</b>.\nA check every {interval}s, {links} links, burst {burst}. Finds land in a batch instead of trickling in. This stopped being a hobby.",
-  'tier.welcome.turbo': "🥷 <b>Sniper Elite</b>.\n{links} links, burst {burst} — the rare piece goes to whoever opened it first, and that is now you.\nThere are not many seats at this level. One of them is yours.",
-  'tier.welcome.elite_max': "🔒 <b>Elite Max</b>.\nEvery {interval}s, {links} links, burst {burst}. This one is not for sale.",
+  'tier.welcome.basic': "▬▬ι═══════ﺤ\n\nNow your hunting has started, <b>Hunter</b>. 🎯 {links} links to set and a check every {interval}s — enough for the brands, the sizes and that price bracket you kept putting off.\nSet your traps 🪤 — the rest is my job.",
+  'tier.welcome.pro': "ᡕᠵデ气亠\n\nYou're battle-hardened now, <b>Ranger</b>, and you read the field on a different level. ⚔️ A check every {interval}s, {links} links, burst {burst} — finds land in a volley instead of trickling in.\nEveryone else is still hitting refresh. 😌",
+  'tier.welcome.turbo': "︻芫═───\n\nYou're an elite sniper — spotting a target and taking it is in your blood. 🥷 Happy to welcome you to the highest tier there is, <b>Sniper Elite</b>: {links} links, burst {burst}, a check every {interval}s.\nThe rare piece goes to whoever opened it first. That's you now. 💎\nEnjoy)",
+  'tier.welcome.elite_max': "▄︻デ══━一\n\nThis one was never on the price list, <b>Elite Max</b>. 🔒 A check every {interval}s, {links} links, burst {burst} — nothing on sale comes close.\nNobody else has it. 🤫",
 };
