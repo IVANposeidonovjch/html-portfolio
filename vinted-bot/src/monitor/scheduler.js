@@ -1,4 +1,4 @@
-import { config, intervalFor } from '../config.js';
+import { burstFor, config, intervalFor, ratePerMinuteFor } from '../config.js';
 import * as store from '../db/index.js';
 import { logger } from '../util/logger.js';
 import { jitter, sleep } from '../util/ratelimit.js';
@@ -127,6 +127,9 @@ export class Monitor {
         searchName: search.name,
         searchId: search.id,
         lang: user?.lang || 'en',
+        // the plan decides how fast this chat may spend its Telegram allowance
+        burst: burstFor(plan),
+        perMinute: ratePerMinuteFor(plan),
       });
       queued++;
     }

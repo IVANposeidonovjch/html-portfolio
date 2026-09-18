@@ -38,13 +38,27 @@ export class Sender {
     this.sent = 0;
   }
 
-  /** Groups and channels carry the tighter limit; a private chat can take more. */
-  #laneFor(chatId) {
+  /**
+   * Groups and channels carry the tighter limit; a private chat can take more.
+   * A job may ask for a bigger burst or a slower sustained rate than the
+   * default — that is the plan speaking. The sustained rate is clamped to what
+   * the chat allows either way: how fast the allowance is spent is ours to
+   * sell, the allowance itself is Telegram's.
+   */
+  #laneFor(chatId, job) {
+    const ceiling = chatId < 0 ? this.rates.group : this.rates.private;
+    const rate = job?.perMinute ? Math.min(job.perMinute / 60, ceiling) : ceiling;
+    const burst = job?.burst ?? this.burst;
+
     let lane = this.lanes.get(chatId);
     if (!lane) {
-      const rate = chatId < 0 ? this.rates.group : this.rates.private;
-      lane = { items: [], inFlight: 0, running: false, bucket: new TokenBucket(rate, this.burst), lastUsed: 0 };
+      lane = { items: [], inFlight: 0, running: false, bucket: new TokenBucket(rate, burst), lastUsed: 0 };
       this.lanes.set(chatId, lane);
+    } else {
+      // two accounts may post into the same group on different plans; the chat
+      // follows the faster of them rather than whoever happened to arrive first
+      lane.bucket.capacity = Math.max(lane.bucket.capacity, burst);
+      lane.bucket.rate = Math.max(lane.bucket.rate, rate);
     }
     lane.lastUsed = Date.now();
     return lane;
@@ -66,7 +80,7 @@ export class Sender {
   }
 
   enqueue(job) {
-    const lane = this.#laneFor(job.chatId);
+    const lane = this.#laneFor(job.chatId, job);
     lane.items.push(job);
     this.#sweep();
     if (!lane.running) this.#drain(job.chatId, lane);

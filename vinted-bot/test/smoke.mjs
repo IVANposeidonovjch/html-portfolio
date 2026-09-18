@@ -664,6 +664,37 @@ test('admin commands go only to the admin own chat, in their language', () => {
   });
 })();
 
+/* ---------------------------- plan tiers --------------------------------- */
+
+const cfg = await import('../src/config.js');
+
+test('the hidden tier exists and is not for sale', () => {
+  assert.ok(cfg.PLANS.includes('turbo'));
+  assert.ok(!cfg.SELLABLE_PLANS.includes('turbo'), 'turbo must never be purchasable');
+  assert.deepEqual(cfg.SELLABLE_PLANS, ['basic', 'pro']);
+  assert.equal(cfg.config.payments.turboStars, undefined, 'there is no price for it');
+});
+
+test('paid speed rises with the tier, free and basic get no advantage', () => {
+  assert.equal(cfg.burstFor('free'), cfg.burstFor('basic'), 'the cheap tier buys no delivery speed');
+  assert.ok(cfg.burstFor('pro') > cfg.burstFor('basic'), 'the top public tier must be faster');
+  assert.ok(cfg.burstFor('turbo') > cfg.burstFor('pro'), 'and the hidden one faster still');
+});
+
+test('turbo inherits the fast polling, not free defaults', () => {
+  // intervalFor() falls back to free for an unknown plan, which would have made
+  // the top tier the slowest to poll
+  assert.equal(cfg.intervalFor('turbo'), cfg.intervalFor('pro'));
+  assert.notEqual(cfg.intervalFor('turbo'), cfg.intervalFor('free'));
+  assert.equal(cfg.searchLimitFor('turbo'), cfg.searchLimitFor('pro'));
+});
+
+test('an unknown plan still lands on free, not on undefined', () => {
+  assert.equal(cfg.intervalFor('nonsense'), cfg.intervalFor('free'));
+  assert.equal(cfg.searchLimitFor('nonsense'), cfg.searchLimitFor('free'));
+  assert.equal(cfg.burstFor('nonsense'), cfg.config.telegram.burst);
+});
+
 /* ------------------------------- delivery -------------------------------- */
 
 const { Sender } = await import('../src/monitor/sender.js');
@@ -767,6 +798,36 @@ await (async () => {
     const waited = flakyLine[1].at - flakyLine[0].at;
     assert.ok(waited > 900, `retry_after was not honoured — only ${waited}ms`);
     assert.equal(flaky.lanes.get(-100).bucket.tokens, 0, 'the chat budget must be emptied, not just this one send');
+  });
+
+  // a plan carrying a bigger burst spends the chat's allowance faster
+  const tierLine = [];
+  const tiered = new Sender(stubApi(tierLine), { burst: 5, groupPerMinute: 20, globalPerSec: 25 });
+  const tierStart = Date.now();
+  for (let i = 0; i < 12; i++) tiered.enqueue({ ...listing(i), burst: 12 });
+  await settled(tiered);
+
+  test('a plan may raise the burst above the default', () => {
+    assert.equal(tierLine.length, 12);
+    assert.ok(Date.now() - tierStart < 1000, 'twelve should leave at once for a plan allowed twelve');
+  });
+
+  test('the sustained rate stays clamped to what the chat allows', () => {
+    const s = new Sender(stubApi([]), { groupPerMinute: 20, privatePerMinute: 60 });
+    s.enqueue({ ...listing(1), chatId: -300, perMinute: 600 }); // far past the group limit
+    assert.equal(s.lanes.get(-300).bucket.rate, 20 / 60, 'Telegram is not for sale');
+    s.enqueue({ ...listing(2), chatId: -400, perMinute: 6 }); // a plan held below it
+    assert.equal(s.lanes.get(-400).bucket.rate, 6 / 60, 'but a plan may be held back');
+  });
+
+  test('a chat shared by two plans follows the faster one', () => {
+    const s = new Sender(stubApi([]), { burst: 5 });
+    s.enqueue({ ...listing(1), chatId: -500, burst: 5 });
+    assert.equal(s.lanes.get(-500).bucket.capacity, 5);
+    s.enqueue({ ...listing(2), chatId: -500, burst: 30 });
+    assert.equal(s.lanes.get(-500).bucket.capacity, 30, 'the better plan lifts the chat');
+    s.enqueue({ ...listing(3), chatId: -500, burst: 5 });
+    assert.equal(s.lanes.get(-500).bucket.capacity, 30, 'and a slower one must not drag it back');
   });
 
   // a private chat is allowed a higher sustained rate than a group
@@ -1218,6 +1279,30 @@ await (async () => {
     assert.match(noArg, /Использование/);
     assert.match(unknown, /не найден/);
   });
+
+  const granted = await runCommand('/grant 4242 turbo 30', 1);
+  test('turbo is handed out by /grant and nothing else', () => {
+    assert.match(granted, /turbo/);
+    assert.equal(store.getUser(4242).plan, 'turbo');
+    assert.equal(cfg.intervalFor(store.effectivePlan(store.getUser(4242))), cfg.intervalFor('pro'));
+  });
+
+  const planScreen = await drive(pressUpdate('m:plan', 4242), 4242);
+  test('the plan screen shows the delivery speed and sells only public tiers', () => {
+    const edit = planScreen.find((c) => c.method === 'editMessageText');
+    assert.match(edit.payload.text, /Turbo/, 'the holder sees what they have');
+    assert.match(edit.payload.text, new RegExp(String(cfg.burstFor('turbo'))), 'and their delivery speed');
+    assert.ok(!/Turbo/.test(edit.payload.text.split('\n').at(-1)), 'the tier line must not advertise it');
+    const buttons = (edit.payload.reply_markup?.inline_keyboard ?? []).flat();
+    assert.ok(!buttons.some((b) => /turbo/i.test(b.callback_data ?? '')), 'and there is no way to buy it');
+  });
+
+  const rejected = await runCommand('/grant 4242 platinum 30', 1);
+  test('/grant refuses a plan that does not exist', () => {
+    assert.match(rejected, /Usage/);
+    assert.equal(store.getUser(4242).plan, 'turbo', 'the account is left alone');
+  });
+  store.setPlan.run('free', null, 4242);
 
   const askStart = await runCommand('/setstartimage', 1);
   test('a picture command asks for the photo and waits for it', () => {

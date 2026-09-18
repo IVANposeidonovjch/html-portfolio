@@ -115,6 +115,7 @@ export const uk = {
 
   'plan.title': '<b>Тариф: {plan}</b>',
   'plan.interval': 'Інтервал перевірки: ~{seconds} сек',
+  'plan.burst': 'Швидкість доставки: до {count} оголошень поспіль',
   'plan.limit': 'Ліміт посилань: {limit}',
   'plan.used': 'Використано: {count}',
   'plan.until': 'Діє до: {date}',

@@ -115,6 +115,7 @@ Example:
 
   'plan.title': '<b>Plan: {plan}</b>',
   'plan.interval': 'Check interval: ~{seconds}s',
+  'plan.burst': 'Delivery burst: up to {count} listings back to back',
   'plan.limit': 'Link limit: {limit}',
   'plan.used': 'In use: {count}',
   'plan.until': 'Valid until: {date}',

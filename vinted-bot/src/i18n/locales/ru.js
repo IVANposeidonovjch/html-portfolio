@@ -115,6 +115,7 @@ export const ru = {
 
   'plan.title': '<b>Тариф: {plan}</b>',
   'plan.interval': 'Интервал проверки: ~{seconds} сек',
+  'plan.burst': 'Скорость доставки: до {count} объявлений подряд',
   'plan.limit': 'Лимит ссылок: {limit}',
   'plan.used': 'Используется: {count}',
   'plan.until': 'Действует до: {date}',

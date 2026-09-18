@@ -115,6 +115,7 @@ Beispiel:
 
   'plan.title': '<b>Tarif: {plan}</b>',
   'plan.interval': 'Prüfintervall: ~{seconds} Sek',
+  'plan.burst': 'Zustellung: bis zu {count} Anzeigen am Stück',
   'plan.limit': 'Link-Limit: {limit}',
   'plan.used': 'Belegt: {count}',
   'plan.until': 'Gültig bis: {date}',

@@ -1,5 +1,5 @@
 import { Bot, GrammyError, InlineKeyboard } from 'grammy';
-import { config, intervalFor, searchLimitFor } from '../config.js';
+import { PLANS, SELLABLE_PLANS, burstFor, config, intervalFor, searchLimitFor } from '../config.js';
 import * as store from '../db/index.js';
 import { LANGS, isLang, resolveLang, t } from '../i18n/index.js';
 import { logger } from '../util/logger.js';
@@ -44,7 +44,7 @@ async function replyLines(ctx, lines, limit = 3500) {
     await ctx.reply(buffer, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
   }
 }
-const planLabel = { free: 'Free', basic: 'Basic', pro: 'Pro ⚡' };
+const planLabel = { free: 'Free', basic: 'Basic', pro: 'Pro ⚡', turbo: 'Turbo 🚀' };
 
 /** Register the user on first contact, seeding the language from Telegram. */
 function who(ctx) {
@@ -540,6 +540,7 @@ export function createBot() {
     if (user.plan_until && plan !== 'free') {
       lines.push(t(lang, 'plan.until', { date: new Date(user.plan_until * 1000).toISOString().slice(0, 10) }));
     }
+    lines.push(t(lang, 'plan.burst', { count: burstFor(plan) }));
     lines.push(
       '',
       t(lang, 'plan.tiers', {
@@ -599,8 +600,8 @@ export function createBot() {
   bot.chatType('private').command('grant', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     const [id, plan, days] = (ctx.match || '').trim().split(/\s+/);
-    if (!id || !['free', 'basic', 'pro'].includes(plan)) {
-      return ctx.reply('Usage: /grant <tg_id> <free|basic|pro> [days]');
+    if (!id || !PLANS.includes(plan)) {
+      return ctx.reply(`Usage: /grant <tg_id> <${PLANS.join('|')}> [days]`);
     }
     store.upsertUser(Number(id), null);
     const until = plan === 'free' ? null : store.now() + (Number(days) || 30) * 86400;
