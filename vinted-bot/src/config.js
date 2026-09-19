@@ -78,8 +78,12 @@ export const config = {
 
   delivery: {
     burst: {
-      free: num(process.env.BURST_FREE, num(process.env.TELEGRAM_BURST, 10)),
-      basic: num(process.env.BURST_BASIC, num(process.env.TELEGRAM_BURST, 10)),
+      // 1 is the strict steady rate — one listing at a time, which is what the
+      // unpaid tiers get. Deliberately NOT falling back to TELEGRAM_BURST: that
+      // is the ceiling nobody may be sold past, not a free allowance, and
+      // inheriting it would hand Scout the same burst Ranger is charged for.
+      free: num(process.env.BURST_FREE, 1),
+      basic: num(process.env.BURST_BASIC, 1),
       pro: num(process.env.BURST_PRO, 20),
       turbo: num(process.env.BURST_TURBO, 30),
       elite_max: num(process.env.BURST_ELITE_MAX, 50),

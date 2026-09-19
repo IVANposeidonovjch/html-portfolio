@@ -1773,12 +1773,17 @@ await (async () => {
     assert.ok(text.includes(`burst ${cfg.burstFor('pro')}`), "and Ranger's own row still names its burst");
   });
 
+  // the same reader, the same tier, with a burst configured: the line is not
+  // gone for good, it is gone because there was nothing to say
+  cfg.config.delivery.burst.free = 12;
   const withBurstScreen = await drive(pressUpdate('m:plan', BURSTLESS), BURSTLESS);
+  Object.assign(cfg.config.delivery.burst, burstBefore);
+
   test('and a tier that does have one still shows it', () => {
     const text = withBurstScreen.find((c) => c.method === 'editMessageText').payload.text;
     assert.ok(
-      text.includes(t('en', 'plan.burst', { count: cfg.burstFor('free') })),
-      `with burst ${cfg.burstFor('free')} configured the line belongs there:\n${text}`,
+      text.includes(t('en', 'plan.burst', { count: 12 })),
+      `with a real burst configured the line belongs there:\n${text}`,
     );
   });
 
