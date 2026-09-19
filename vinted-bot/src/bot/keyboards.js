@@ -77,11 +77,17 @@ export function chatsKb(lang, chats, topicsByChat) {
   return backRow(kb, lang);
 }
 
+/**
+ * Two flags per row. One per row was fine at four languages and turns into a
+ * column you have to scroll at seven — and the list only grows from here.
+ */
 export const langKb = (current) => {
   const kb = new InlineKeyboard();
-  for (const { code, label } of LANGS) {
-    kb.text(`${code === current ? '✅ ' : ''}${label}`, `lang:${code}`).row();
-  }
+  LANGS.forEach(({ code, label }, i) => {
+    kb.text(`${code === current ? '✅ ' : ''}${label}`, `lang:${code}`);
+    if (i % 2 === 1) kb.row();
+  });
+  if (LANGS.length % 2 === 1) kb.row();
   return backRow(kb, current);
 };
 

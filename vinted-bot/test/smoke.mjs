@@ -20,7 +20,7 @@ const { Monitor } = await import('../src/monitor/scheduler.js');
 const { renderItem, itemKeyboard, demoItem, DEMO_SEARCH } = await import('../src/bot/format.js');
 const { helpText, helpParts } = await import('../src/bot/help.js');
 const cfg = await import('../src/config.js');
-const { LOCALES, allLabels, formatEvery, resolveLang, t } = await import('../src/i18n/index.js');
+const { LANGS, LOCALES, allLabels, formatEvery, resolveLang, t } = await import('../src/i18n/index.js');
 const { STRATEGIES, extractItems, strategyByName, orderedStrategies, filtersLookHonoured } =
   await import('../src/vinted/endpoints.js');
 const { candidatesFor, endpointCache, isConnectionFailure, noteProxyAlive, noteProxyFailure, proxyHealth, resetProxyHealth } =
@@ -410,7 +410,7 @@ test('placeholders are the same in every translation of a key', () => {
 test('t() interpolates, falls back to English and never prints a raw key', () => {
   assert.match(t('ru', 'add.created', { name: 'Raf', seconds: 60 }), /«Raf»/);
   assert.match(t('uk', 'plan.limit', { limit: 25 }), /25/);
-  assert.equal(t('fr', 'item.button'), 'URL', 'an unknown language falls back to English');
+  assert.equal(t('zz', 'item.button'), 'URL', 'an unknown language falls back to English');
   assert.equal(t('en', 'no.such.key'), 'no.such.key');
   // an unsupplied placeholder stays visible instead of rendering "undefined"
   assert.match(t('en', 'plan.limit', {}), /\{limit\}/);
@@ -418,14 +418,19 @@ test('t() interpolates, falls back to English and never prints a raw key', () =>
 
 test('menu buttons are matched in every language', () => {
   const labels = allLabels('btn.add');
-  assert.equal(labels.length, Object.keys(LOCALES).length);
-  assert.ok(labels.includes(LOCALES.de['btn.add']));
-  assert.ok(labels.includes(LOCALES.ru['btn.add']));
+  // every locale must be matchable; two languages rendering a label the same
+  // way is fine and deduplicates, so the count is not the thing to assert
+  for (const [code, dict] of Object.entries(LOCALES)) {
+    assert.ok(labels.includes(dict['btn.add']), `${code}: its Add button would not be recognised`);
+  }
+  assert.ok(labels.length > 1, 'a single label for every language means nothing is translated');
 });
+
 
 test('the interface language is seeded from the Telegram locale', () => {
   assert.equal(resolveLang('de-DE'), 'de');
   assert.equal(resolveLang('uk'), 'uk');
+  assert.equal(resolveLang('fr-CA'), 'fr', 'a regional variant lands on the language we do have');
   assert.equal(resolveLang('pt-BR'), 'en');
   assert.equal(resolveLang(undefined), 'en');
 });
@@ -788,7 +793,22 @@ test('a group upgraded to a supergroup takes its searches with it', () => {
 
 /* ---------------------------- inline menu ------------------------------- */
 
-const { mainMenu, menuOnlyKb, helpKb, sosKb } = await import('../src/bot/keyboards.js');
+const { mainMenu, menuOnlyKb, helpKb, sosKb, langKb } = await import('../src/bot/keyboards.js');
+
+test('the language picker stays a grid rather than a column to scroll', () => {
+  const rows = langKb('fr').inline_keyboard;
+  assert.ok(rows.every((r) => r.length <= 2), 'two flags per row');
+  const flat = rows.flat();
+  assert.equal(flat.length, LANGS.length + 1, 'every language plus the way back');
+  for (const { code, label } of LANGS) {
+    const button = flat.find((b) => b.callback_data === `lang:${code}`);
+    assert.ok(button, `${code} is missing from the picker`);
+    assert.ok(button.text.includes(label), `${code} is not labelled in its own language`);
+  }
+  assert.match(flat.find((b) => b.callback_data === 'lang:fr').text, /^✅ /, 'the current one is ticked');
+  assert.equal(flat.filter((b) => b.text.startsWith('✅')).length, 1, 'and only that one');
+});
+
 
 test('the menu is an inline keyboard, not a keyboard pinned to the chat', () => {
   const kb = mainMenu('ru', { monitoring: true });
@@ -1008,7 +1028,11 @@ test('admin commands go only to the admin own chat, in their language', () => {
   };
   const partial = await publishCommands(broken, { adminIds: [], langOf: () => 'en' });
   test('startup survives a menu call that fails', () => {
-    assert.equal(partial.failed.length, 5, 'one group-scope failure per language plus the default');
+    assert.equal(
+      partial.failed.length,
+      Object.keys(LOCALES).length + 1,
+      'one group-scope failure per language plus the default',
+    );
     assert.ok(partial.published > 0, 'the lists that worked still count');
   });
 })();

@@ -2,19 +2,25 @@ import { ru } from './locales/ru.js';
 import { en } from './locales/en.js';
 import { de } from './locales/de.js';
 import { uk } from './locales/uk.js';
+import { fr } from './locales/fr.js';
+import { it } from './locales/it.js';
+import { pl } from './locales/pl.js';
 
 /**
  * Every user-visible string lives in a locale file, addressed by key. English is
  * the fallback: a key missing from a translation falls back to `en` rather than
  * showing the raw key to a user.
  */
-export const LOCALES = { en, ru, de, uk };
+export const LOCALES = { en, ru, de, uk, fr, it, pl };
 
 export const LANGS = [
   { code: 'en', label: '🇬🇧 English' },
   { code: 'de', label: '🇩🇪 Deutsch' },
   { code: 'uk', label: '🇺🇦 Українська' },
   { code: 'ru', label: '🇷🇺 Русский' },
+  { code: 'fr', label: '🇫🇷 Français' },
+  { code: 'it', label: '🇮🇹 Italiano' },
+  { code: 'pl', label: '🇵🇱 Polski' },
 ];
 
 export const isLang = (code) => Object.hasOwn(LOCALES, code);
