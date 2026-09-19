@@ -29,7 +29,9 @@ export const en = {
 3. Turn on Topics in the group settings, then send <code>/bind</code> there.
 4. Done — every link you add now opens its own topic: Raf, Helmut, Bags, all in one place.
 
-⌨️ <b>Commands</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Everything else is a button.`,
+⌨️ <b>Commands</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Everything else is a button.
+
+✉️ <b>More links than your plan allows, a problem or an idea</b> — write to @tyzanema.`,
 
   // the example section: a mockup when there is no picture, a pointer when there is
   'help.example': `🔔 <b>What an alert looks like</b>

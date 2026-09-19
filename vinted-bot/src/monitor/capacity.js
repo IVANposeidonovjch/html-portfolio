@@ -1,6 +1,7 @@
 import { config, intervalFor, isLocked, searchLimitFor, seatCapFor } from '../config.js';
 import * as store from '../db/index.js';
 import { t } from '../i18n/index.js';
+import { proxyHealth } from '../vinted/client.js';
 
 /**
  * What the proxy pool can carry, and how much of it is already sold.
@@ -108,6 +109,20 @@ export function seatAvailableFor(plan, tgId) {
 }
 
 /**
+ * How much of the pool is actually answering. A dead proxy does not shrink the
+ * budget above — it is expected back — but the operator has to be able to see
+ * that traffic is squeezed through fewer routes than they are paying for.
+ */
+export function proxyHealthLine() {
+  const health = proxyHealth();
+  const down = health.entries.filter((e) => !e.alive);
+  const base = `Живых прокси: ${health.alive} из ${health.total}`;
+  if (!down.length) return base;
+  const which = down.map((e) => `${e.direct ? 'прямой IP' : `#${e.index}`} (ещё ${e.downForSec}с)`);
+  return `${base} · выбыли: ${which.join(', ')}`;
+}
+
+/**
  * The capacity section of /stats. Russian like the rest of the admin surface,
  * and living here rather than in the entry point so it can be tested.
  */
@@ -119,6 +134,7 @@ export function statsLines() {
     ...report.domains.map((d) => `  ${d.domain}: ${d.rps.toFixed(2)} req/s (${d.keys})`),
     // by position, not by URL: a proxy string carries its own password
     `Прокси: ${proxySlots().map((s, i) => `${s.proxy === 'direct' ? 'прямой IP' : `#${i + 1}`} ${s.rps} req/s`).join(', ')}`,
+    proxyHealthLine(),
   ];
   const capped = cappedPlans();
   if (capped.length) {

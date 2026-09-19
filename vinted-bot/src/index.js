@@ -1,4 +1,4 @@
-import { config } from './config.js';
+import { config, overSubscriptionCap, STARS_SUBSCRIPTION_CAP } from './config.js';
 import * as store from './db/index.js';
 import { createBot } from './bot/index.js';
 import { publishCommands } from './bot/commands.js';
@@ -123,6 +123,16 @@ logger.info(
     `turbo=${config.intervals.turbo}s, ${config.vinted.proxies.length || 'no'} proxies, ` +
     `${config.vinted.rps} rps/domain, pool budget ${capacityReport().capacity.toFixed(2)} req/s`,
 );
+
+// A subscription tier priced past Telegram's ceiling cannot be sold at all:
+// createInvoiceLink refuses the link and the buy button dies in the user's
+// hands. Cheaper to hear it at boot than from the first person who taps it.
+for (const { plan, stars, usd } of overSubscriptionCap()) {
+  logger.error(
+    `${plan} is $${usd} = ${stars} ⭐, past Telegram's ${STARS_SUBSCRIPTION_CAP} ⭐ ` +
+      'subscription ceiling — that tier cannot be sold until the price comes down.',
+  );
+}
 
 // Measured 17.09.2026: the catalog answers 403 to datacenter IPs. Without a
 // proxy every search will fail, so say it once at boot instead of letting the

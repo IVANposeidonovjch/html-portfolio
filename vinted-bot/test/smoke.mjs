@@ -23,7 +23,8 @@ const cfg = await import('../src/config.js');
 const { LOCALES, allLabels, formatEvery, resolveLang, t } = await import('../src/i18n/index.js');
 const { STRATEGIES, extractItems, strategyByName, orderedStrategies, filtersLookHonoured } =
   await import('../src/vinted/endpoints.js');
-const { candidatesFor, endpointCache } = await import('../src/vinted/client.js');
+const { candidatesFor, endpointCache, isConnectionFailure, noteProxyAlive, noteProxyFailure, proxyHealth, resetProxyHealth } =
+  await import('../src/vinted/client.js');
 const { normalizeItem } = await import('../src/vinted/normalize.js');
 
 let failures = 0;
@@ -225,6 +226,80 @@ test('a response that ignored the brand filter is rejected, not cached', () => {
   assert.equal(filtersLookHonoured({ catalog_ids: '2050' }, cat([2050, 2050, 2050])).ok, true);
   assert.equal(filtersLookHonoured({ catalog_ids: '2050' }, cat([2050, 76, 12])).ok, false);
 });
+
+/* ------------------------------ proxy health ---------------------------- */
+
+test('a socket that never opens is told apart from an answer we did not like', () => {
+  for (const dead of [
+    { code: 'UND_ERR_CONNECT_TIMEOUT', message: 'Connect Timeout Error' },
+    { code: 'ECONNREFUSED' },
+    { code: 'ETIMEDOUT' },
+    { message: 'socket hang up' },
+    { cause: { code: 'ENETUNREACH' } },
+  ]) assert.equal(isConnectionFailure(dead), true, JSON.stringify(dead));
+
+  // a 403 or a 404 is the service talking, and says nothing about the proxy
+  for (const answered of [
+    new Error('svc-catalogue/plain: HTTP 403'),
+    { code: 'ERR_INVALID_ARG_TYPE' },
+    new Error('не JSON (HTTP 404)'),
+  ]) assert.equal(isConnectionFailure(answered), false, String(answered.message || answered.code));
+});
+
+await (async () => {
+  const { proxies } = cfg.config.vinted;
+  cfg.config.vinted.proxies = ['http://a:1', 'http://b:2', 'http://c:3'];
+  resetProxyHealth();
+  const timeout = { code: 'UND_ERR_CONNECT_TIMEOUT', message: 'Connect Timeout Error' };
+  const dead = 'http://b:2';
+
+  test('one timeout is bad luck — the proxy stays in rotation', () => {
+    noteProxyFailure(dead, timeout);
+    assert.equal(proxyHealth().alive, 3, 'a single miss must not drop an IP');
+  });
+
+  test('three in a row means dead, and it leaves the rotation', () => {
+    noteProxyFailure(dead, timeout);
+    noteProxyFailure(dead, timeout);
+    const health = proxyHealth();
+    assert.equal(health.alive, 2, 'the pool is down to the two that answer');
+    assert.equal(health.total, 3);
+    const out = health.entries.find((e) => !e.alive);
+    assert.equal(out.index, 2, 'and it is the one that was failing');
+    assert.ok(out.downForSec > 0, 'with a cooldown before it is tried again');
+  });
+
+  const { proxyHealthLine } = await import('../src/monitor/capacity.js');
+  test('the count is what /stats reports, dropped ones named by position', () => {
+    const line = proxyHealthLine();
+    assert.match(line, /Живых прокси: 2 из 3/);
+    assert.match(line, /#2/, 'named by position');
+    assert.ok(!line.includes('http://'), 'never by URL — a proxy string carries a password');
+  });
+
+  test('the cooldown running out puts it back up for a re-test', () => {
+    const health = proxyHealth(Date.now() + cfg.config.vinted.proxyDeadCooldownSec * 1000 + 1);
+    assert.equal(health.alive, 3, 'it gets another chance rather than staying dead for ever');
+  });
+
+  test('answering again restores it and forgives the streak', () => {
+    noteProxyAlive(dead);
+    assert.equal(proxyHealth().alive, 3);
+    assert.equal(proxyHealth().entries.find((e) => e.index === 2).fails, 0);
+  });
+
+  test('but a proxy that fails its re-test drops again immediately', () => {
+    for (let i = 0; i < cfg.config.vinted.proxyFailThreshold; i++) noteProxyFailure(dead, timeout);
+    assert.equal(proxyHealth().alive, 2);
+    const at = Date.now() + cfg.config.vinted.proxyDeadCooldownSec * 1000 + 1;
+    assert.equal(proxyHealth(at).alive, 3, 'back up for its chance');
+    noteProxyFailure(dead, timeout, at); // one wasted request, not one in three
+    assert.equal(proxyHealth(at).alive, 2, 'and straight back out');
+  });
+
+  resetProxyHealth();
+  cfg.config.vinted.proxies = proxies;
+})();
 
 /* ------------------------------ normalizing ----------------------------- */
 
@@ -969,6 +1044,68 @@ test('the floor and a lapsed plan are both polled for nothing', () => {
   store.deleteSearch.run(onFloor, 7502);
 });
 
+test('every place a link count appears reads the same config value', () => {
+  // The bug this pins: /plan said 100 and the tier welcome said 60 for the
+  // same tier. Both now come from searchLimitFor(), so moving the config moves
+  // every screen — and a locale that hardcodes a number fails right here.
+  const was = cfg.config.limits.turbo.searches;
+  try {
+    cfg.config.limits.turbo.searches = 4242;
+    assert.equal(cfg.searchLimitFor('turbo'), 4242);
+    for (const lang of Object.keys(LOCALES)) {
+      const welcome = t(lang, 'tier.welcome.turbo', {
+        links: cfg.searchLimitFor('turbo'),
+        every: formatEvery(lang, cfg.intervalFor('turbo')),
+        burst: cfg.burstFor('turbo'),
+      });
+      assert.ok(welcome.includes('4242'), `${lang}: the welcome does not follow the config`);
+      assert.ok(!welcome.includes(String(was)), `${lang}: the old number is baked into the copy`);
+
+      const row = t(lang, 'plan.tierRow', {
+        name: LOCALES[lang]['plan.name.turbo'],
+        price: '$32',
+        interval: cfg.intervalFor('turbo'),
+        links: cfg.searchLimitFor('turbo'),
+        burst: cfg.burstFor('turbo'),
+      });
+      assert.ok(row.includes('4242'), `${lang}: the comparison row does not follow the config`);
+    }
+  } finally {
+    cfg.config.limits.turbo.searches = was;
+  }
+});
+
+test('Sniper Elite is 50 links, bought for speed rather than volume', () => {
+  assert.equal(cfg.searchLimitFor('turbo'), 50);
+  assert.equal(cfg.usdFor('turbo'), 32);
+  assert.ok(cfg.intervalFor('turbo') < cfg.intervalFor('pro'), 'what the price actually buys');
+  assert.ok(cfg.burstFor('turbo') > cfg.burstFor('pro'));
+});
+
+test('every monthly tier is sellable as a subscription, under Telegram ceiling', () => {
+  assert.deepEqual(cfg.overSubscriptionCap(), [], 'a tier past the cap cannot be sold at all');
+  for (const plan of cfg.SUBSCRIPTION_PLANS) {
+    const stars = cfg.starsFor(plan);
+    assert.ok(stars > 0, `${plan} has no price, so it has no buy button`);
+    assert.ok(stars <= cfg.STARS_SUBSCRIPTION_CAP, `${plan} is ${stars} ⭐, past the ceiling`);
+    assert.ok(cfg.isSubscriptionPlan(plan), `${plan} must auto-renew`);
+  }
+  // and Scout, the one-off, is still not one of them
+  assert.ok(!cfg.isSubscriptionPlan('free'));
+});
+
+test('a Star price follows the dollar price unless a tier pins its own', () => {
+  const was = cfg.config.payments.stars.pro;
+  try {
+    cfg.config.payments.stars.pro = 0; // nothing pinned: derive it
+    assert.equal(cfg.starsFor('pro'), Math.round(cfg.usdFor('pro') * cfg.config.payments.starsPerUsd));
+    cfg.config.payments.stars.pro = 999;
+    assert.equal(cfg.starsFor('pro'), 999, 'an explicit number always wins');
+  } finally {
+    cfg.config.payments.stars.pro = was;
+  }
+});
+
 test('the reserved tier exists, is hidden, and has no price', () => {
   assert.ok(cfg.PLANS.includes('elite_max'));
   assert.ok(cfg.isHiddenPlan('elite_max'), 'it must not appear in the public comparison');
@@ -1011,7 +1148,11 @@ test('every plan has its own polling and limits, none falls back to free', () =>
     const below = cfg.PLANS[i - 1];
     assert.ok(cfg.intervalFor(plan) <= cfg.intervalFor(below), `${plan} polls slower than ${below}`);
     assert.ok(cfg.burstFor(plan) >= cfg.burstFor(below), `${plan} delivers slower than ${below}`);
-    assert.ok(cfg.searchLimitFor(plan) >= cfg.searchLimitFor(below), `${plan} allows fewer links than ${below}`);
+    // links are the one rung that may go DOWN: Sniper Elite is bought for
+    // speed and burst, not volume, and is deliberately narrower than Ranger
+    if (plan !== 'turbo') {
+      assert.ok(cfg.searchLimitFor(plan) >= cfg.searchLimitFor(below), `${plan} allows fewer links than ${below}`);
+    }
   }
 });
 
@@ -1826,7 +1967,7 @@ await (async () => {
     const edit = planScreen.find((c) => c.method === 'editMessageText');
     assert.match(edit.payload.text, /\$9/, 'Hunter price');
     assert.match(edit.payload.text, /\$19/, 'Ranger price');
-    assert.match(edit.payload.text, /\$79/, 'Sniper Elite price');
+    assert.match(edit.payload.text, /\$32/, 'Sniper Elite price');
     assert.ok(edit.payload.text.includes('Sniper Elite'), 'scarcity names the tier it pushes');
     assert.match(edit.payload.text, /🔥/, 'the scarcity line is there');
   });

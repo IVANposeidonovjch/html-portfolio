@@ -29,7 +29,9 @@ export const uk = {
 3. Увімкни «Теми» в налаштуваннях групи і напиши там <code>/bind</code>.
 4. Готово — кожне нове посилання заводить свою тему: Raf, Helmut, Bags в одному місці.
 
-⌨️ <b>Команди</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Решта кнопками.`,
+⌨️ <b>Команди</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Решта кнопками.
+
+✉️ <b>Потрібно більше посилань, ніж дає тариф, щось зламалось або є ідея</b> — пиши @tyzanema.`,
 
   // the example section: a mockup when there is no picture, a pointer when there is
   'help.example': `🔔 <b>Так виглядає знахідка</b>

@@ -29,7 +29,9 @@ export const de = {
 3. In den Gruppeneinstellungen Themen aktivieren und dort <code>/bind</code> schreiben.
 4. Fertig — jeder neue Link legt sein eigenes Thema an: Raf, Helmut, Bags an einem Ort.
 
-⌨️ <b>Befehle</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Alles andere per Button.`,
+⌨️ <b>Befehle</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Alles andere per Button.
+
+✉️ <b>Mehr Links als dein Tarif erlaubt, ein Problem oder eine Idee</b> — schreib an @tyzanema.`,
 
   // the example section: a mockup when there is no picture, a pointer when there is
   'help.example': `🔔 <b>So sieht ein Treffer aus</b>

@@ -140,19 +140,109 @@ function bucketFor(domain) {
   return buckets.get(domain);
 }
 
+/* ---------------------------- proxy health ------------------------------ */
+
+/**
+ * A proxy that stops answering does not announce it — it just times out, and
+ * round-robin keeps handing it one request in N for ever. Nothing looks broken
+ * from the outside: searches simply run late for a fraction of everybody.
+ *
+ * So connection failures are counted per proxy, and a proxy that racks up
+ * enough of them in a row is dropped out of rotation for a cooldown. The
+ * request that found it dead is retried on a healthy one rather than failing.
+ *
+ * The cooldown expiring is itself the re-test: the proxy goes back into the
+ * rotation, and the next request either proves it (counter reset, logged) or
+ * fails once and drops it again — one wasted request per cooldown, not one in
+ * N of everything. Health is keyed by proxy rather than by domain+proxy,
+ * because an IP that cannot open a socket is not having a bad day on .de only.
+ */
+const health = new Map(); // proxy label -> { fails, deadUntil }
+
+const proxyKey = (proxy) => proxy ?? 'direct';
+
+/** Position, never the URL: a proxy string carries its own password. */
+function proxyLabel(proxy) {
+  if (!proxy) return 'direct IP';
+  const at = config.vinted.proxies.indexOf(proxy);
+  return at >= 0 ? `proxy #${at + 1}` : 'proxy';
+}
+
+function healthOf(proxy) {
+  const key = proxyKey(proxy);
+  if (!health.has(key)) health.set(key, { fails: 0, deadUntil: 0 });
+  return health.get(key);
+}
+
+/** Could not open a socket at all — not a rejection, a silence. */
+export function isConnectionFailure(err) {
+  const code = err?.code || err?.cause?.code || '';
+  if (/UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|EPIPE/i.test(code)) {
+    return true;
+  }
+  return /connect timeout|socket hang up|other side closed|fetch failed/i.test(err?.message || '');
+}
+
+export function noteProxyFailure(proxy, err, at = Date.now()) {
+  const state = healthOf(proxy);
+  state.fails++;
+  const { proxyFailThreshold, proxyDeadCooldownSec } = config.vinted;
+  // `deadUntil <= at` is what makes a failed re-test cost one request rather
+  // than three: a proxy already serving its cooldown is not re-armed, but one
+  // that has just come back and failed again goes straight out.
+  if (state.fails >= proxyFailThreshold && state.deadUntil <= at) {
+    state.deadUntil = at + proxyDeadCooldownSec * 1000;
+    logger.warn(
+      `${proxyLabel(proxy)} dropped from rotation after ${state.fails} connection failures ` +
+        `(${err?.message || 'no answer'}); re-tested in ${proxyDeadCooldownSec}s`,
+    );
+  }
+  return state;
+}
+
+export function noteProxyAlive(proxy) {
+  const state = healthOf(proxy);
+  if (state.deadUntil || state.fails >= config.vinted.proxyFailThreshold) {
+    logger.info(`${proxyLabel(proxy)} answered again — back in rotation`);
+  }
+  state.fails = 0;
+  state.deadUntil = 0;
+  return state;
+}
+
+/** What /stats reports: how much of the pool is actually answering. */
+export function proxyHealth(at = Date.now()) {
+  const routes = config.vinted.proxies.length ? config.vinted.proxies : [null];
+  const entries = routes.map((proxy, i) => {
+    const state = healthOf(proxy);
+    return {
+      index: i + 1,
+      direct: !proxy,
+      alive: state.deadUntil <= at,
+      fails: state.fails,
+      downForSec: Math.max(0, Math.round((state.deadUntil - at) / 1000)),
+    };
+  });
+  return { total: entries.length, alive: entries.filter((e) => e.alive).length, entries };
+}
+
+/** Tests drive the rotation directly; nothing in the bot resets health. */
+export const resetProxyHealth = () => health.clear();
+
 function sessionFor(domain) {
-  const proxies = config.vinted.proxies;
-  const usable = [];
-  for (const proxy of proxies.length ? proxies : [null]) {
+  const routes = config.vinted.proxies.length ? config.vinted.proxies : [null];
+  const all = routes.map((proxy) => {
     const key = `${domain}|${proxy ?? 'direct'}`;
     if (!sessions.has(key)) sessions.set(key, new Session(domain, proxy));
-    const s = sessions.get(key);
-    if (s.blockedUntil < Date.now()) usable.push(s);
-  }
+    return sessions.get(key);
+  });
+  const at = Date.now();
+  const recoversAt = (s) => Math.max(s.blockedUntil, healthOf(s.proxy).deadUntil);
+  const usable = all.filter((s) => recoversAt(s) < at);
   if (!usable.length) {
-    // everything is cooling down: pick the one that recovers first
-    const all = [...sessions.values()].filter((s) => s.domain === domain);
-    return all.sort((a, b) => a.blockedUntil - b.blockedUntil)[0];
+    // everything is cooling down or dropped: take whichever comes back first,
+    // which is also how a dropped proxy gets its chance to prove itself
+    return [...all].sort((a, b) => recoversAt(a) - recoversAt(b))[0];
   }
   return usable[proxyCursor++ % usable.length];
 }
@@ -241,17 +331,39 @@ async function tryStrategy(session, { strategy, headerKind }, domain, query, per
  * @returns {Promise<object[]>} raw Vinted item objects, newest first
  */
 export async function fetchCatalog(domain, query, { perPage = config.vinted.perPage } = {}) {
-  const session = sessionFor(domain);
   await bucketFor(domain).take();
+  let lastConnectionError = null;
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    await session.bootstrap(attempt > 0);
+    // picked per attempt, not once: a proxy that turns out to be dead is
+    // dropped below, and the next turn of this loop lands on a live one
+    const session = sessionFor(domain);
+    try {
+      await session.bootstrap(attempt > 0);
+    } catch (err) {
+      if (!isConnectionFailure(err)) throw err;
+      noteProxyFailure(session.proxy, err);
+      lastConnectionError = err;
+      continue;
+    }
 
     const gone = [];
     let sawForbidden = false;
+    let lostConnection = false;
     for (const pair of candidatesFor(domain, query)) {
       const { strategy, headerKind } = pair;
-      const { items, error, url } = await tryStrategy(session, pair, domain, query, perPage);
+      let outcome;
+      try {
+        outcome = await tryStrategy(session, pair, domain, query, perPage);
+      } catch (err) {
+        // no socket at all, as opposed to an answer we did not like
+        if (!isConnectionFailure(err)) throw err;
+        noteProxyFailure(session.proxy, err);
+        lastConnectionError = err;
+        lostConnection = true;
+        break;
+      }
+      const { items, error, url } = outcome;
 
       if (items) {
         // 200 with listings is not success on its own: the service may answer
@@ -275,8 +387,12 @@ export async function fetchCatalog(domain, query, { perPage = config.vinted.perP
               `${verdict ? `, фильтры соблюдаются: ${verdict.detail}` : ''} — ${url}`,
           );
         }
+        noteProxyAlive(session.proxy);
         return items;
       }
+
+      // An answer, even a bad one, means the proxy is carrying traffic
+      noteProxyAlive(session.proxy);
 
       // Auth problems mean the session, not the endpoint: re-bootstrap and retry.
       if (error.status === 401 || error.status === 403) {
@@ -317,6 +433,7 @@ export async function fetchCatalog(domain, query, { perPage = config.vinted.perP
       await bucketFor(domain).take(); // stay polite while walking candidates
     }
 
+    if (lostConnection) continue; // try the next proxy rather than give up
     if (gone.length) {
       throw new VintedError(
         `Ни один вариант каталога не отдал корректно отфильтрованную выдачу. Проверено: ${gone.join(' | ')}.` +
@@ -326,6 +443,12 @@ export async function fetchCatalog(domain, query, { perPage = config.vinted.perP
         { endpointGone: true },
       );
     }
+  }
+  if (lastConnectionError) {
+    throw new VintedError(
+      `Не удалось соединиться ни с одним прокси: ${lastConnectionError.message}`,
+      0,
+    );
   }
   throw new VintedError('Не удалось получить данные Vinted', 0);
 }

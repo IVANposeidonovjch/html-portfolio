@@ -36,7 +36,7 @@ export const config = {
     basic: { searches: num(process.env.LIMIT_BASIC_SEARCHES, 25) },
     pro: { searches: num(process.env.LIMIT_PRO_SEARCHES, 100) },
     turbo: {
-      searches: num(process.env.LIMIT_TURBO_SEARCHES, 300),
+      searches: num(process.env.LIMIT_TURBO_SEARCHES, 50),
     },
     elite_max: {
       searches: num(process.env.LIMIT_ELITE_MAX_SEARCHES, num(process.env.LIMIT_TURBO_SEARCHES, 1000)),
@@ -57,6 +57,10 @@ export const config = {
     // single cheap IP are not safe at the same rate.
     proxyRps: list(process.env.PROXY_SAFE_RPS).map(Number),
     proxyRpsDefault: num(process.env.PROXY_SAFE_RPS_DEFAULT, 0.7),
+    // How many connection failures in a row mean a proxy is dead rather than
+    // unlucky, and how long it sits out before it is given another chance.
+    proxyFailThreshold: num(process.env.PROXY_FAIL_THRESHOLD, 3),
+    proxyDeadCooldownSec: num(process.env.PROXY_DEAD_COOLDOWN_SEC, 300),
     userAgent:
       process.env.USER_AGENT ||
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
@@ -139,16 +143,20 @@ export const config = {
     // Scout is the way in: a real purchase, priced like a coffee, that runs out
     // in a day. Everything else is sold by the month.
     stars: {
-      free: num(process.env.SCOUT_PRICE_STARS, 77),
+      free: num(process.env.SCOUT_PRICE_STARS, 0),
       basic: num(process.env.BASIC_PRICE_STARS, 0),
       pro: num(process.env.PRO_PRICE_STARS, 0),
       turbo: num(process.env.TURBO_PRICE_STARS, 0),
     },
+    // Stars per dollar, so a price is set once in dollars and the Star figure
+    // follows. 77 is the rate Scout was already priced at ($1 = 77 ⭐); any
+    // tier can still pin its own number with <TIER>_PRICE_STARS.
+    starsPerUsd: num(process.env.STARS_PER_USD, 77),
     usd: {
       free: num(process.env.PRICE_USD_FREE, 1),
       basic: num(process.env.PRICE_USD_BASIC, 9),
       pro: num(process.env.PRICE_USD_PRO, 19),
-      turbo: num(process.env.PRICE_USD_TURBO, 79),
+      turbo: num(process.env.PRICE_USD_TURBO, 32),
     },
     planDays: num(process.env.PLAN_DAYS, 30),
     // The day everybody gets for walking in: no signup, no payment, and it
@@ -289,8 +297,34 @@ export const SEAT_ENV_VAR = {
   elite_max: 'MAX_ELITE_MAX_SEATS',
 };
 
-export const starsFor = (plan) => config.payments.stars[plan] ?? 0;
+/**
+ * Telegram's ceiling on one Star subscription charge. Not ours to raise: a
+ * createInvoiceLink carrying a subscription_period is rejected above it, so a
+ * tier priced past this is a tier that cannot be sold as a subscription at all.
+ */
+export const STARS_SUBSCRIPTION_CAP = 2500;
+
 export const usdFor = (plan) => config.payments.usd[plan] ?? 0;
+
+/**
+ * What a tier costs in Stars. The dollar price is the one number anybody sets;
+ * the Star figure follows it at STARS_PER_USD, so the two cannot drift apart.
+ * A tier may still pin its own with <TIER>_PRICE_STARS, which wins.
+ */
+export function starsFor(plan) {
+  const pinned = config.payments.stars[plan] ?? 0;
+  if (pinned > 0) return pinned;
+  const usd = usdFor(plan);
+  return usd > 0 ? Math.round(usd * config.payments.starsPerUsd) : 0;
+}
+
+/** Subscription tiers priced past what Telegram will take. Empty is the goal. */
+export const overSubscriptionCap = () =>
+  SUBSCRIPTION_PLANS.filter((plan) => starsFor(plan) > STARS_SUBSCRIPTION_CAP).map((plan) => ({
+    plan,
+    stars: starsFor(plan),
+    usd: usdFor(plan),
+  }));
 
 /** 0 = leave the chat's own ceiling alone. */
 export function ratePerMinuteFor(plan) {
