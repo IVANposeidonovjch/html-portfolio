@@ -132,8 +132,11 @@ Beispiel:
   'plan.trialLeft': 'Testphase: noch {left}',
   'plan.legendGroup': '👥 = alle Suchen in einer Gruppe, nach Themen sortiert — keine 100 einzelnen Chats',
   'plan.legendBurst': '⚡N = N Treffer kommen in einer Welle, nicht tröpfchenweise. Telegram begrenzt, wie schnell Bots senden — du bist am Maximum, die kleineren Tarife nicht.',
-  'plan.invoiceDescTrial': '{hours} Std. · ~{seconds} Sek Intervall · bis zu {limit} Links',
-  'pay.okTrial': '✅ {plan} läuft für die nächsten {hours} Std.',
+  'plan.invoiceDescTrial': '{period} · ~{seconds} Sek Intervall · bis zu {limit} Links',
+  'pay.okTrial': '✅ {plan} ist aktiv. Zugang: {period}.',
+  'trial.window.week': '1 Woche',
+  'trial.window.days': '{n} Tage',
+  'trial.window.hours': '{n} Std.',
 
   'lang.choose': 'Sprache der Oberfläche wählen:',
   'lang.set': '✅ Sprache auf Deutsch umgestellt.',
@@ -240,6 +243,8 @@ Beispiel:
 
   // how an interval reads to a person
   'unit.sec': '{n} s',
+  'unit.day': '{n}d',
+  'unit.week': 'Woche',
   'unit.hour': '{n}h',
   'unit.min': '{n}m',
 };

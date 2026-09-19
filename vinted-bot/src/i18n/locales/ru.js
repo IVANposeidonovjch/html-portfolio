@@ -132,8 +132,11 @@ export const ru = {
   'plan.trialLeft': 'Пробный период: осталось {left}',
   'plan.legendGroup': '👥 = все поиски в одной группе, разложены по темам — а не 100 отдельных чатов',
   'plan.legendBurst': '⚡N = N находок приходят одной волной, а не по капле. Telegram ограничивает скорость ботов — у тебя максимум, у тарифов ниже его нет.',
-  'plan.invoiceDescTrial': '{hours} ч. · интервал ~{seconds} сек · до {limit} ссылок',
-  'pay.okTrial': '✅ {plan} включён на {hours} ч.',
+  'plan.invoiceDescTrial': '{period} · интервал ~{seconds} сек · до {limit} ссылок',
+  'pay.okTrial': '✅ Тариф {plan} включён. Доступ: {period}.',
+  'trial.window.week': 'неделя',
+  'trial.window.days': '{n} дней',
+  'trial.window.hours': '{n} ч.',
 
   'lang.choose': 'Выбери язык интерфейса:',
   'lang.set': '✅ Язык переключён на русский.',
@@ -240,6 +243,8 @@ export const ru = {
 
   // how an interval reads to a person
   'unit.sec': '{n} с',
+  'unit.day': '{n}d',
+  'unit.week': 'нед.',
   'unit.hour': '{n}h',
   'unit.min': '{n}m',
 };

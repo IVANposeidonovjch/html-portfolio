@@ -132,8 +132,11 @@ export const uk = {
   'plan.trialLeft': 'Пробний період: лишилось {left}',
   'plan.legendGroup': '👥 = усі пошуки в одній групі, розкладені по темах — а не 100 окремих чатів',
   'plan.legendBurst': '⚡N = N знахідок приходять однією хвилею, а не по краплі. Telegram обмежує швидкість ботів — у тебе максимум, у нижчих тарифів його немає.',
-  'plan.invoiceDescTrial': '{hours} год · інтервал ~{seconds} сек · до {limit} посилань',
-  'pay.okTrial': '✅ {plan} увімкнено на {hours} год.',
+  'plan.invoiceDescTrial': '{period} · інтервал ~{seconds} сек · до {limit} посилань',
+  'pay.okTrial': '✅ {plan} увімкнено. Доступ: {period}.',
+  'trial.window.week': 'тиждень',
+  'trial.window.days': '{n} днів',
+  'trial.window.hours': '{n} год',
 
   'lang.choose': 'Обери мову інтерфейсу:',
   'lang.set': '✅ Мову змінено на українську.',
@@ -240,6 +243,8 @@ export const uk = {
 
   // how an interval reads to a person
   'unit.sec': '{n} с',
+  'unit.day': '{n}d',
+  'unit.week': 'тиж.',
   'unit.hour': '{n}h',
   'unit.min': '{n}m',
 };

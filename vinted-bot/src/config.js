@@ -147,7 +147,9 @@ export const config = {
       turbo: num(process.env.PRICE_USD_TURBO, 79),
     },
     planDays: num(process.env.PLAN_DAYS, 30),
-    trialHours: num(process.env.SCOUT_TRIAL_HOURS, 24),
+    // A week. Still expressed in hours so a shorter window stays configurable —
+    // what the screens call it is derived from this, never hardcoded.
+    trialHours: num(process.env.SCOUT_TRIAL_HOURS, 168),
 
     // Extra links, bought on top of any paid plan and lost when it lapses.
     addon: {
@@ -208,12 +210,24 @@ export function burstFor(plan) {
 }
 
 /**
- * How long one purchase of this plan lasts. Scout is sold by the hour because
- * it is a trial; everything above it by the month.
+ * How long one purchase of this plan lasts. Scout is a week; everything above
+ * it is a month.
  */
 export function planDurationSec(plan) {
   if (plan === 'free') return config.payments.trialHours * 3600;
   return config.payments.planDays * 86400;
+}
+
+/**
+ * Which shape the trial window is, so the screens can name it honestly rather
+ * than hardcoding "week" next to a setting that no longer says a week.
+ * @returns {{ kind: 'week'|'days'|'hours', n: number }}
+ */
+export function trialWindow() {
+  const hours = config.payments.trialHours;
+  if (hours === 168) return { kind: 'week', n: 1 };
+  if (hours % 24 === 0) return { kind: 'days', n: hours / 24 };
+  return { kind: 'hours', n: hours };
 }
 
 /** How many accounts may hold this tier at once. 0 = as many as show up. */

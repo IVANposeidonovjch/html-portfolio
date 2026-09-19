@@ -1,7 +1,7 @@
 import { Bot, GrammyError, InlineKeyboard } from 'grammy';
 import {
   PLANS, PUBLIC_PLANS, SEAT_ENV_VAR, SELLABLE_PLANS, burstFor, config, intervalFor, isLocked,
-  planDurationSec, searchLimitFor, starsFor, usdFor,
+  planDurationSec, searchLimitFor, starsFor, trialWindow, usdFor,
 } from '../config.js';
 import * as store from '../db/index.js';
 import { admits, seatAvailableFor, seats, stagger } from '../monitor/capacity.js';
@@ -87,9 +87,9 @@ function nextTierPitch(lang, plan) {
       }),
     );
   }
-  // A day costs a dollar and a month costs nine: the difference between them is
-  // not "+$8 a month", so the trial gets no price line at all. The comparison
-  // right above already prints what the next tier costs.
+  // A week costs a dollar and a month costs nine: the difference between them
+  // is not "+$8 a month", so the trial gets no price line at all. The
+  // comparison right above already prints what the next tier costs.
   if (delta > 0 && plan !== 'free') lines.push(t(lang, 'plan.next.price', { delta }));
   return lines;
 }
@@ -99,12 +99,27 @@ const planName = (lang, plan) => t(lang, `plan.name.${plan}`);
 
 /**
  * Scout carries its length: a dollar next to $9, $19 and $79 in one column
- * reads as a dollar a month unless the row says it is a dollar for a day.
+ * reads as a dollar a month unless the row says what it actually buys.
  */
-const priceTag = (plan) => {
+const priceTag = (lang, plan) => {
   if (!usdFor(plan)) return '$0';
-  return plan === 'free' ? `$${usdFor(plan)}/${config.payments.trialHours}h` : `$${usdFor(plan)}`;
+  return plan === 'free' ? `$${usdFor(plan)}/${trialPeriod(lang, 'short')}` : `$${usdFor(plan)}`;
 };
+
+/**
+ * How long a Scout purchase lasts, said two ways: `short` for the price column
+ * ("$1/week") and long for a sentence ("Access: 1 week"). Both are read off the
+ * configured window, so shortening it to a day makes them both say a day
+ * instead of quietly advertising a week nobody gets.
+ */
+function trialPeriod(lang, form = 'long') {
+  const { kind, n } = trialWindow();
+  if (form === 'short') {
+    if (kind === 'week') return t(lang, 'unit.week');
+    return t(lang, kind === 'days' ? 'unit.day' : 'unit.hour', { n });
+  }
+  return t(lang, `trial.window.${kind}`, { n });
+}
 
 /**
  * A burst of one is not a burst — it is the plain steady rate, one listing at a
@@ -130,13 +145,20 @@ function scarcityLine(lang) {
 const linkLimit = (user, plan) =>
   searchLimitFor(plan) + (isLocked(plan) ? 0 : user.extra_links || 0);
 
-/** "23h 40m" left, in the abbreviations every language shares. */
+/**
+ * What is left of a trial, in the abbreviations every language shares, at the
+ * two units that matter at that distance: "6d 14h" with days to go, "23h 40m"
+ * on the last day, "12m" at the end. Never three units — nobody reads a week
+ * down to the minute.
+ */
 function leftToRun(lang, seconds) {
   const left = Math.max(0, seconds);
-  const hours = Math.floor(left / 3600);
+  const days = Math.floor(left / 86400);
+  const hours = Math.floor((left % 86400) / 3600);
   const minutes = Math.floor((left % 3600) / 60);
-  if (!hours) return t(lang, 'unit.min', { n: minutes });
-  return `${t(lang, 'unit.hour', { n: hours })} ${t(lang, 'unit.min', { n: minutes })}`;
+  if (days) return `${t(lang, 'unit.day', { n: days })} ${t(lang, 'unit.hour', { n: hours })}`;
+  if (hours) return `${t(lang, 'unit.hour', { n: hours })} ${t(lang, 'unit.min', { n: minutes })}`;
+  return t(lang, 'unit.min', { n: minutes });
 }
 
 /** Register the user on first contact, seeding the language from Telegram. */
@@ -828,7 +850,7 @@ export function createBot() {
         (tier === plan ? '▸ ' : '') +
           t(lang, hasBurst(tier) ? 'plan.tierRow' : 'plan.tierRowNoBurst', {
             name: planName(lang, tier),
-            price: priceTag(tier),
+            price: priceTag(lang, tier),
             interval: intervalFor(tier),
             links: searchLimitFor(tier),
             burst: burstFor(tier),
@@ -896,7 +918,7 @@ export function createBot() {
       `Vinted Monitor ${planName(lang, what)}`,
       what === 'free'
         ? t(lang, 'plan.invoiceDescTrial', {
-            hours: config.payments.trialHours,
+            period: trialPeriod(lang),
             seconds: intervalFor(what),
             limit: searchLimitFor(what),
           })
@@ -961,7 +983,7 @@ export function createBot() {
     store.setPlan.run(what, base + planDurationSec(what), user.tg_id);
     await ctx.reply(
       what === 'free'
-        ? t(lang, 'pay.okTrial', { plan: planName(lang, what), hours: config.payments.trialHours })
+        ? t(lang, 'pay.okTrial', { plan: planName(lang, what), period: trialPeriod(lang) })
         : t(lang, 'pay.ok', { plan: planName(lang, what), days: config.payments.planDays }),
     );
     // an extension of the same plan is not a new tier to celebrate

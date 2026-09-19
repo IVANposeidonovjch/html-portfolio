@@ -866,11 +866,24 @@ test('admin commands go only to the admin own chat, in their language', () => {
 
 /* --------------------- the floor and the Scout trial --------------------- */
 
-test('Scout is sold by the hour, everything above it by the month', () => {
+test('Scout is sold by the week, everything above it by the month', () => {
   assert.ok(cfg.SELLABLE_PLANS.includes('free'), 'the way in is a purchase now');
   assert.ok(cfg.starsFor('free') > 0, 'and it has a price');
   assert.equal(cfg.planDurationSec('free'), cfg.config.payments.trialHours * 3600);
   assert.equal(cfg.planDurationSec('basic'), cfg.config.payments.planDays * 86400);
+  assert.equal(cfg.planDurationSec('free'), 7 * 86400, 'the way in is a week');
+  assert.deepEqual(cfg.trialWindow(), { kind: 'week', n: 1 });
+
+  // the window is still a setting, and what the screens call it follows it
+  const was = cfg.config.payments.trialHours;
+  try {
+    cfg.config.payments.trialHours = 72;
+    assert.deepEqual(cfg.trialWindow(), { kind: 'days', n: 3 });
+    cfg.config.payments.trialHours = 36;
+    assert.deepEqual(cfg.trialWindow(), { kind: 'hours', n: 36 }, 'a ragged window stays in hours');
+  } finally {
+    cfg.config.payments.trialHours = was;
+  }
   assert.ok(
     cfg.planDurationSec('free') < cfg.planDurationSec('basic'),
     'a trial that outlasts a month is not a trial',
@@ -1889,7 +1902,7 @@ await (async () => {
 
   test('a running trial counts down instead of naming a date', () => {
     const text = trialScreen.find((c) => c.method === 'editMessageText').payload.text;
-    assert.match(text, /Trial: \d+h \d+m left/, `no countdown in:\n${text}`);
+    assert.match(text, /Trial: \d+d \d+h left/, `no countdown in:\n${text}`);
     assert.ok(!text.includes(LOCALES.en['plan.until'].split('{')[0]), 'a date is for the monthly plans');
     assert.ok(text.includes(LOCALES.en['plan.name.free']), 'and it names Scout');
   });
@@ -1898,10 +1911,34 @@ await (async () => {
     const text = trialScreen.find((c) => c.method === 'editMessageText').payload.text;
     // $1 sitting under $9/$19/$79 reads as a dollar a month unless it says otherwise
     assert.ok(
-      text.includes(`$${cfg.usdFor('free')}/${cfg.config.payments.trialHours}h`),
+      text.includes(`$${cfg.usdFor('free')}/${LOCALES.en['unit.week']}`),
       `Scout's price does not say how long it lasts:\n${text}`,
     );
+    assert.ok(!/\$\d+\/\d+h/.test(text), 'a week must not be advertised as a count of hours');
     assert.ok(!/just \+\$\d+ a month/.test(text), 'and a day-to-month price delta is not offered');
+  });
+
+  // the last day of the trial: days drop out and the countdown gets finer
+  store.setPlan.run('free', store.now() + 5 * 3600 + 20 * 60, TRIAL);
+  const lastDay = await drive(pressUpdate('m:plan', TRIAL), TRIAL);
+  store.setPlan.run('free', store.now() + cfg.config.payments.trialHours * 3600, TRIAL);
+
+  test('the countdown changes unit as the trial runs out', () => {
+    const text = lastDay.find((c) => c.method === 'editMessageText').payload.text;
+    assert.match(text, /Trial: 5h \d+m left/, `expected hours and minutes in:\n${text}`);
+    assert.ok(!/\dd /.test(text), 'no days left to name');
+  });
+
+  // a shorter window must say so everywhere rather than keep advertising a week
+  const hoursBefore = cfg.config.payments.trialHours;
+  cfg.config.payments.trialHours = 48;
+  const shortWindow = await drive(pressUpdate('m:plan', TRIAL), TRIAL);
+  cfg.config.payments.trialHours = hoursBefore;
+
+  test('shortening the window changes what the screen calls it', () => {
+    const text = shortWindow.find((c) => c.method === 'editMessageText').payload.text;
+    assert.ok(text.includes('$1/2d'), `the price tag still claims a week:\n${text}`);
+    assert.ok(!text.includes(`$1/${LOCALES.en['unit.week']}`), 'a 48h window is not a week');
   });
 
   test('the tier list carries both markers and explains them underneath', () => {
