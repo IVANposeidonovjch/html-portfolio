@@ -24,12 +24,11 @@ export const uk = {
 {example}
 
 🧵 <b>Групи та теми</b>
-Додай бота адміном у групу і напиши там <code>/bind</code>. Увімкнеш «Теми» — бот сам заведе тему під кожен пошук: Raf, Helmut, Bags в одному місці.
+1. Створи групу.
+2. Додай бота адміном і ввімкни йому право «Керування темами».
+3. Увімкни «Теми» в налаштуваннях групи і напиши там <code>/bind</code>.
+4. Готово — кожне нове посилання заводить свою тему: Raf, Helmut, Bags в одному місці.
 
-🛡 <b>Без дублів</b>
-Перший прохід лише запамʼятовує видачу. Одне оголошення потрапляє в тему один раз, навіть якщо збіглося з десятьма посиланнями.
-
-⚙️ <b>Налаштування</b> — кнопками нижче: тариф, мова, список чатів.
 ⌨️ <b>Команди</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Решта кнопками.`,
 
   // the example section: a mockup when there is no picture, a pointer when there is
@@ -54,6 +53,9 @@ export const uk = {
     '✅ «{name}» додано.\nПеревірка кожні ~{seconds} сек. Перший прохід лише запамʼятовує наявні оголошення — надсилатиму з наступних.',
   'add.atCapacity':
     '⏳ Зараз усі слоти моніторингу зайняті, посилання не додано. Спробуй за кілька хвилин — слоти постійно звільняються.',
+
+  'add.locked':
+    '🔒 Зараз тарифу немає, додавати нікуди. <b>Scout</b> — доба за ціну кави, відкрий «Тариф» нижче.',
 
   'url.err.notLink': 'Це не схоже на посилання.',
   'url.err.scheme': 'Потрібне http(s) посилання.',
@@ -124,6 +126,14 @@ export const uk = {
   'plan.tiers': 'Free — {free} сек · Basic — {basic} сек · Pro — {pro} сек',
   'plan.invoiceDesc': '{days} днів · інтервал ~{seconds} сек · до {limit} посилань',
   'pay.ok': '✅ Тариф {plan} активовано на {days} днів.',
+  'plan.name.locked': 'Без тарифу 🔒',
+  'plan.lockedNote': 'Нічого не працює: пошуки на паузі, доки не обереш тариф нижче.',
+  'plan.grandfathered': '(збережено — нічого не видалено, але щоб додати нове, спершу прибери одне)',
+  'plan.trialLeft': 'Пробний період: лишилось {left}',
+  'plan.legendGroup': '👥 = усі пошуки в одній групі, розкладені по темах — а не 100 окремих чатів',
+  'plan.legendBurst': '⚡N = N знахідок приходять однією хвилею, а не по краплі. Telegram обмежує швидкість ботів — у тебе максимум, у нижчих тарифів його немає.',
+  'plan.invoiceDescTrial': '{hours} год · інтервал ~{seconds} сек · до {limit} посилань',
+  'pay.okTrial': '✅ {plan} увімкнено на {hours} год.',
 
   'lang.choose': 'Обери мову інтерфейсу:',
   'lang.set': '✅ Мову змінено на українську.',
@@ -189,13 +199,13 @@ export const uk = {
   'plan.name.turbo': 'Sniper Elite',
   'plan.name.elite_max': 'Elite Max 🔒',
   'plan.scarcity': '🔥 <b>Sniper Elite</b> — кількість місць обмежена.',
-  'plan.scarcitySeats': '🔥 <b>Sniper Elite</b> — лишилося {left} місць із {cap}.',
-  'plan.soldOut': '🔥 <b>Sniper Elite</b> — усі {cap} місць зайняті. Місце звільниться, коли чиясь підписка завершиться.',
+  'plan.scarcitySeats': '🔥 <b>Sniper Elite</b> — лишилося всього {left} місць.',
+  'plan.soldOut': '🔥 <b>Sniper Elite</b> — усі місця зайняті. Місце звільниться, коли чиясь підписка завершиться.',
   'plan.full': '🚫 На тарифі {plan} зараз немає вільних місць. Гроші не списані. Місце звільниться, коли завершиться чиясь підписка.',
   'plan.refunded': '↩️ Поки тривала оплата, місця на {plan} закінчились — платіж повернено повністю. Гроші не списані.',
   'btn.soldOut': '{name} · місць немає',
   'plan.tiersHeader': '<b>Тарифи</b>',
-  'plan.tierRow': '{name} — {price} · перевірка {interval} с · {links} посилань · сплеск {burst}',
+  'plan.tierRow': '{name} — {price} · перевірка {interval} с · {links} посилань · ⚡{burst}',
   'plan.tierRowNoBurst': '{name} — {price} · перевірка {interval} с · {links} посилань',
   'plan.addon': 'Докуплені посилання: +{count}',
   'plan.addonOffer': '➕ {links} посилань за {price} — до будь-якого платного тарифу.',
@@ -230,5 +240,6 @@ export const uk = {
 
   // how an interval reads to a person
   'unit.sec': '{n} с',
+  'unit.hour': '{n}h',
   'unit.min': '{n}m',
 };

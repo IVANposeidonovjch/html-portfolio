@@ -67,7 +67,7 @@ export class Monitor {
   }
 
   async tick() {
-    const due = store.dueSearches.all(store.now(), BATCH);
+    const due = store.dueSearches.all(store.now(), store.now(), BATCH);
     if (!due.length) return;
     this.cycles++;
 

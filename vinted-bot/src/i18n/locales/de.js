@@ -24,12 +24,11 @@ export const de = {
 {example}
 
 🧵 <b>Gruppen und Themen</b>
-Bot als Admin in die Gruppe holen und dort <code>/bind</code> schreiben. Themen aktivieren — der Bot legt pro Suche selbst eins an: Raf, Helmut, Bags an einem Ort.
+1. Eine Gruppe anlegen.
+2. Den Bot als Admin hinzufügen, mit dem Recht „Themen verwalten“.
+3. In den Gruppeneinstellungen Themen aktivieren und dort <code>/bind</code> schreiben.
+4. Fertig — jeder neue Link legt sein eigenes Thema an: Raf, Helmut, Bags an einem Ort.
 
-🛡 <b>Keine Dubletten</b>
-Der erste Durchlauf merkt sich nur den Bestand. Eine Anzeige landet einmal im Thema, auch wenn zehn deiner Links passen.
-
-⚙️ <b>Einstellungen</b> — in den Buttons unten: Tarif, Sprache, deine Chats.
 ⌨️ <b>Befehle</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Alles andere per Button.`,
 
   // the example section: a mockup when there is no picture, a pointer when there is
@@ -54,6 +53,9 @@ Beispiel:
     '✅ „{name}“ hinzugefügt.\nPrüfung alle ~{seconds} Sek. Der erste Durchlauf merkt sich nur den Bestand — alles Neue danach kommt bei dir an.',
   'add.atCapacity':
     '⏳ Gerade sind alle Überwachungsplätze belegt, der Link wurde nicht angelegt. Versuch es in ein paar Minuten noch einmal — es werden laufend welche frei.',
+
+  'add.locked':
+    '🔒 Du hast gerade keinen Tarif, es lässt sich nichts anlegen. <b>Scout</b> ist ein Tag davon zum Preis eines Kaffees — öffne unten „Tarif“.',
 
   'url.err.notLink': 'Das sieht nicht nach einem Link aus.',
   'url.err.scheme': 'Es muss ein http(s)-Link sein.',
@@ -124,6 +126,14 @@ Beispiel:
   'plan.tiers': 'Free — {free} Sek · Basic — {basic} Sek · Pro — {pro} Sek',
   'plan.invoiceDesc': '{days} Tage · ~{seconds} Sek Intervall · bis zu {limit} Links',
   'pay.ok': '✅ {plan} für {days} Tage aktiviert.',
+  'plan.name.locked': 'Kein Tarif 🔒',
+  'plan.lockedNote': 'Es läuft nichts: deine Suchen pausieren, bis du unten einen Tarif wählst.',
+  'plan.grandfathered': '(Bestandsschutz — nichts wurde gelöscht, aber für einen neuen Link musst du erst einen entfernen)',
+  'plan.trialLeft': 'Testphase: noch {left}',
+  'plan.legendGroup': '👥 = alle Suchen in einer Gruppe, nach Themen sortiert — keine 100 einzelnen Chats',
+  'plan.legendBurst': '⚡N = N Treffer kommen in einer Welle, nicht tröpfchenweise. Telegram begrenzt, wie schnell Bots senden — du bist am Maximum, die kleineren Tarife nicht.',
+  'plan.invoiceDescTrial': '{hours} Std. · ~{seconds} Sek Intervall · bis zu {limit} Links',
+  'pay.okTrial': '✅ {plan} läuft für die nächsten {hours} Std.',
 
   'lang.choose': 'Sprache der Oberfläche wählen:',
   'lang.set': '✅ Sprache auf Deutsch umgestellt.',
@@ -189,13 +199,13 @@ Beispiel:
   'plan.name.turbo': 'Sniper Elite',
   'plan.name.elite_max': 'Elite Max 🔒',
   'plan.scarcity': '🔥 <b>Sniper Elite</b> — nur eine begrenzte Anzahl Plätze.',
-  'plan.scarcitySeats': '🔥 <b>Sniper Elite</b> — noch {left} von {cap} Plätzen frei.',
-  'plan.soldOut': '🔥 <b>Sniper Elite</b> — alle {cap} Plätze sind belegt. Einer wird frei, sobald ein Abo ausläuft.',
+  'plan.scarcitySeats': '🔥 <b>Sniper Elite</b> — nur noch {left} Plätze frei.',
+  'plan.soldOut': '🔥 <b>Sniper Elite</b> — alle Plätze sind belegt. Einer wird frei, sobald ein Abo ausläuft.',
   'plan.full': '🚫 {plan} ist gerade voll — alle Plätze sind belegt. Es wurde nichts abgebucht. Ein Platz wird frei, sobald ein Abo ausläuft.',
   'plan.refunded': '↩️ Während der Zahlung wurde {plan} voll, der Betrag wurde vollständig erstattet. Es wurde nichts abgebucht.',
   'btn.soldOut': '{name} · keine Plätze frei',
   'plan.tiersHeader': '<b>Tarife</b>',
-  'plan.tierRow': '{name} — {price} · Prüfung alle {interval} s · {links} Links · Schub {burst}',
+  'plan.tierRow': '{name} — {price} · Prüfung alle {interval} s · {links} Links · ⚡{burst}',
   'plan.tierRowNoBurst': '{name} — {price} · Prüfung alle {interval} s · {links} Links',
   'plan.addon': 'Zusätzlich gekaufte Links: +{count}',
   'plan.addonOffer': '➕ {links} Links für {price} — zu jedem bezahlten Tarif.',
@@ -230,5 +240,6 @@ Beispiel:
 
   // how an interval reads to a person
   'unit.sec': '{n} s',
+  'unit.hour': '{n}h',
   'unit.min': '{n}m',
 };

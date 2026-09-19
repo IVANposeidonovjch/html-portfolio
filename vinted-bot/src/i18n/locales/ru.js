@@ -24,12 +24,11 @@ export const ru = {
 {example}
 
 🧵 <b>Группы и темы</b>
-Добавь бота админом в группу и напиши там <code>/bind</code>. Включишь «Темы» — бот сам заведёт тему под каждый поиск: Raf, Helmut, Bags в одном месте.
+1. Создай группу.
+2. Добавь бота админом и включи ему право «Управление темами».
+3. Включи «Темы» в настройках группы и напиши там <code>/bind</code>.
+4. Готово — каждая новая ссылка заводит свою тему: Raf, Helmut, Bags в одном месте.
 
-🛡 <b>Без дублей</b>
-Первый проход только запоминает выдачу. Одно объявление в одну тему приходит один раз, даже если совпало с десятью ссылками.
-
-⚙️ <b>Настройки</b> — кнопками ниже: тариф, язык, список чатов.
 ⌨️ <b>Команды</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Остальное кнопками.`,
 
   // the example section: a mockup when there is no picture, a pointer when there is
@@ -54,6 +53,9 @@ export const ru = {
     '✅ «{name}» добавлен.\nПроверка каждые ~{seconds} сек. Первый проход только запоминает текущие объявления — присылать буду начиная со следующих.',
   'add.atCapacity':
     '⏳ Сейчас все слоты мониторинга заняты, ссылка не добавлена. Попробуй через несколько минут — слоты постоянно освобождаются.',
+
+  'add.locked':
+    '🔒 Сейчас тарифа нет, добавлять некуда. <b>Scout</b> — сутки за цену кофе, открой «Тариф» ниже.',
 
   'url.err.notLink': 'Это не похоже на ссылку.',
   'url.err.scheme': 'Нужна http(s) ссылка.',
@@ -124,6 +126,14 @@ export const ru = {
   'plan.tiers': 'Free — {free} сек · Basic — {basic} сек · Pro — {pro} сек',
   'plan.invoiceDesc': '{days} дней · интервал ~{seconds} сек · до {limit} ссылок',
   'pay.ok': '✅ Тариф {plan} активирован на {days} дней.',
+  'plan.name.locked': 'Без тарифа 🔒',
+  'plan.lockedNote': 'Ничего не работает: поиски на паузе, пока не выберешь тариф ниже.',
+  'plan.grandfathered': '(сохранено — ничего не удалено, но чтобы добавить новую, сначала убери одну)',
+  'plan.trialLeft': 'Пробный период: осталось {left}',
+  'plan.legendGroup': '👥 = все поиски в одной группе, разложены по темам — а не 100 отдельных чатов',
+  'plan.legendBurst': '⚡N = N находок приходят одной волной, а не по капле. Telegram ограничивает скорость ботов — у тебя максимум, у тарифов ниже его нет.',
+  'plan.invoiceDescTrial': '{hours} ч. · интервал ~{seconds} сек · до {limit} ссылок',
+  'pay.okTrial': '✅ {plan} включён на {hours} ч.',
 
   'lang.choose': 'Выбери язык интерфейса:',
   'lang.set': '✅ Язык переключён на русский.',
@@ -189,13 +199,13 @@ export const ru = {
   'plan.name.turbo': 'Sniper Elite',
   'plan.name.elite_max': 'Elite Max 🔒',
   'plan.scarcity': '🔥 <b>Sniper Elite</b> — мест ограниченное количество.',
-  'plan.scarcitySeats': '🔥 <b>Sniper Elite</b> — осталось {left} мест из {cap}.',
-  'plan.soldOut': '🔥 <b>Sniper Elite</b> — все {cap} мест заняты. Место освободится, когда чья-то подписка закончится.',
+  'plan.scarcitySeats': '🔥 <b>Sniper Elite</b> — осталось всего {left} мест.',
+  'plan.soldOut': '🔥 <b>Sniper Elite</b> — все места заняты. Место освободится, когда чья-то подписка закончится.',
   'plan.full': '🚫 На тарифе {plan} сейчас нет свободных мест. Деньги не списаны. Место освободится, когда закончится чья-то подписка.',
   'plan.refunded': '↩️ Пока шла оплата, места на {plan} закончились — платёж возвращён полностью. Деньги не списаны.',
   'btn.soldOut': '{name} · мест нет',
   'plan.tiersHeader': '<b>Тарифы</b>',
-  'plan.tierRow': '{name} — {price} · проверка {interval} с · {links} ссылок · всплеск {burst}',
+  'plan.tierRow': '{name} — {price} · проверка {interval} с · {links} ссылок · ⚡{burst}',
   'plan.tierRowNoBurst': '{name} — {price} · проверка {interval} с · {links} ссылок',
   'plan.addon': 'Докупленные ссылки: +{count}',
   'plan.addonOffer': '➕ {links} ссылок за {price} — к любому платному тарифу.',
@@ -230,5 +240,6 @@ export const ru = {
 
   // how an interval reads to a person
   'unit.sec': '{n} с',
+  'unit.hour': '{n}h',
   'unit.min': '{n}m',
 };

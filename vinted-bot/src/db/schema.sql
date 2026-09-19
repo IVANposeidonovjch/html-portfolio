@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS users (
   kb_cleared         INTEGER NOT NULL DEFAULT 1,   -- fresh users never saw the old reply keyboard
   extra_links        INTEGER NOT NULL DEFAULT 0,   -- add-on capacity, lost when the plan lapses
   last_fomo_nudge_at INTEGER,
-  plan               TEXT    NOT NULL DEFAULT 'free',   -- free | basic | pro
-  plan_until         INTEGER,                            -- unix seconds, NULL = unlimited (free)
+  plan               TEXT    NOT NULL DEFAULT 'locked', -- locked | free | basic | pro | turbo | elite_max
+  plan_until         INTEGER,                            -- unix seconds, NULL = never runs out
   monitoring_enabled INTEGER NOT NULL DEFAULT 1,
   created_at         INTEGER NOT NULL
 );

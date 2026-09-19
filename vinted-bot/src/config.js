@@ -10,6 +10,9 @@ export const config = {
   dbPath: process.env.DB_PATH || './data/bot.sqlite',
 
   intervals: {
+    // the floor: nothing is polled here, so the value only exists to keep
+    // intervalFor() from falling through to a tier the account does not hold
+    locked: num(process.env.INTERVAL_LOCKED, 900),
     free: num(process.env.INTERVAL_FREE, 900),
     basic: num(process.env.INTERVAL_BASIC, 300),
     pro: num(process.env.INTERVAL_PRO, 60),
@@ -22,7 +25,11 @@ export const config = {
   jitterPct: num(process.env.JITTER_PCT, 20),
 
   limits: {
-    free: { searches: num(process.env.LIMIT_FREE_SEARCHES, 3) },
+    // What an account holds when it has bought nothing, or when what it bought
+    // ran out. 0 means it can add nothing and its searches do not run; raise it
+    // to hand out a standing allowance without touching any code.
+    locked: { searches: num(process.env.LIMIT_LOCKED_SEARCHES, 0) },
+    free: { searches: num(process.env.LIMIT_FREE_SEARCHES, 2) },
     basic: { searches: num(process.env.LIMIT_BASIC_SEARCHES, 25) },
     pro: { searches: num(process.env.LIMIT_PRO_SEARCHES, 100) },
     turbo: {
@@ -82,6 +89,7 @@ export const config = {
       // unpaid tiers get. Deliberately NOT falling back to TELEGRAM_BURST: that
       // is the ceiling nobody may be sold past, not a free allowance, and
       // inheriting it would hand Scout the same burst Ranger is charged for.
+      locked: num(process.env.BURST_LOCKED, 1),
       free: num(process.env.BURST_FREE, 1),
       basic: num(process.env.BURST_BASIC, 1),
       pro: num(process.env.BURST_PRO, 20),
@@ -124,18 +132,22 @@ export const config = {
 
   payments: {
     // Stars charged per plan, and the dollar figure shown in the comparison.
+    // Scout is the way in: a real purchase, priced like a coffee, that runs out
+    // in a day. Everything else is sold by the month.
     stars: {
+      free: num(process.env.SCOUT_PRICE_STARS, 77),
       basic: num(process.env.BASIC_PRICE_STARS, 0),
       pro: num(process.env.PRO_PRICE_STARS, 0),
       turbo: num(process.env.TURBO_PRICE_STARS, 0),
     },
     usd: {
-      free: num(process.env.PRICE_USD_FREE, 0),
+      free: num(process.env.PRICE_USD_FREE, 1),
       basic: num(process.env.PRICE_USD_BASIC, 9),
       pro: num(process.env.PRICE_USD_PRO, 19),
       turbo: num(process.env.PRICE_USD_TURBO, 79),
     },
     planDays: num(process.env.PLAN_DAYS, 30),
+    trialHours: num(process.env.SCOUT_TRIAL_HOURS, 24),
 
     // Extra links, bought on top of any paid plan and lost when it lapses.
     addon: {
@@ -159,14 +171,25 @@ export const config = {
 };
 
 /**
- * Every plan that exists, slowest first. Internal keys stay as they were so
+ * Every plan that exists, least first. Internal keys stay as they were so
  * stored rows keep their meaning; the names people see live in the locales.
+ *
+ * `locked` is the floor, and it is not a tier anybody is sold: it is what an
+ * account holds before it has bought anything and what every plan falls back to
+ * when its paid time runs out. `free` is no longer free — it is Scout, the
+ * 24-hour way in — so something had to sit underneath it, or an expiring Scout
+ * would lapse straight back into itself and never expire at all.
+ *
  * `elite_max` is the reserved one: no price, no button, /grant only.
  */
-export const PLANS = ['free', 'basic', 'pro', 'turbo', 'elite_max'];
-export const SELLABLE_PLANS = ['basic', 'pro', 'turbo'];
-export const PUBLIC_PLANS = ['free', ...SELLABLE_PLANS];
+export const LOCKED_PLAN = 'locked';
+export const PLANS = ['locked', 'free', 'basic', 'pro', 'turbo', 'elite_max'];
+export const SELLABLE_PLANS = ['free', 'basic', 'pro', 'turbo'];
+export const PUBLIC_PLANS = [...SELLABLE_PLANS];
 export const isHiddenPlan = (plan) => !PUBLIC_PLANS.includes(plan);
+
+/** Everything a paid plan grants is gone here, so nothing is polled either. */
+export const isLocked = (plan) => plan === LOCKED_PLAN;
 
 /** Plans that see listings fast enough that a near-miss note would be a lie. */
 export const INSTANT_PLANS = ['turbo', 'elite_max'];
@@ -182,6 +205,15 @@ export function searchLimitFor(plan) {
 /** How many listings this plan may push back to back before pacing starts. */
 export function burstFor(plan) {
   return config.delivery.burst[plan] ?? config.telegram.burst;
+}
+
+/**
+ * How long one purchase of this plan lasts. Scout is sold by the hour because
+ * it is a trial; everything above it by the month.
+ */
+export function planDurationSec(plan) {
+  if (plan === 'free') return config.payments.trialHours * 3600;
+  return config.payments.planDays * 86400;
 }
 
 /** How many accounts may hold this tier at once. 0 = as many as show up. */

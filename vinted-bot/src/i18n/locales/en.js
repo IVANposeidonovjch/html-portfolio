@@ -24,12 +24,11 @@ export const en = {
 {example}
 
 🧵 <b>Groups and topics</b>
-Add the bot to a group as admin and type <code>/bind</code> there. Turn on Topics and it creates one per search by itself: Raf, Helmut, Bags, all in one place.
+1. Create a group.
+2. Add the bot as an admin, with "Manage Topics" switched on.
+3. Turn on Topics in the group settings, then send <code>/bind</code> there.
+4. Done — every link you add now opens its own topic: Raf, Helmut, Bags, all in one place.
 
-🛡 <b>No duplicates</b>
-The first pass only records what is already listed. A listing reaches a topic once, even when ten of your links match it.
-
-⚙️ <b>Settings</b> — in the buttons below: plan, language, your chats.
 ⌨️ <b>Commands</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Everything else is a button.`,
 
   // the example section: a mockup when there is no picture, a pointer when there is
@@ -54,6 +53,9 @@ Example:
     '✅ "{name}" added.\nChecked every ~{seconds}s. The first pass only records what is already listed — you will get everything new after that.',
   'add.atCapacity':
     '⏳ Every monitoring slot is busy right now, so this link was not added. Try again in a few minutes — slots free up all the time.',
+
+  'add.locked':
+    '🔒 You have no plan right now, so there is nowhere to add a link. <b>Scout</b> is a day of it for the price of a coffee — open Plan below.',
 
   'url.err.notLink': "That doesn't look like a link.",
   'url.err.scheme': 'An http(s) link is required.',
@@ -124,6 +126,14 @@ Example:
   'plan.tiers': 'Free — {free}s · Basic — {basic}s · Pro — {pro}s',
   'plan.invoiceDesc': '{days} days · ~{seconds}s interval · up to {limit} links',
   'pay.ok': '✅ {plan} activated for {days} days.',
+  'plan.name.locked': 'No plan 🔒',
+  'plan.lockedNote': 'Nothing is running: your searches are paused until you pick a plan below.',
+  'plan.grandfathered': "(grandfathered — nothing was deleted, but you'll need to remove one before adding another)",
+  'plan.trialLeft': 'Trial: {left} left',
+  'plan.legendGroup': '👥 = all your searches, one group, sorted by topic — not 100 separate chats',
+  'plan.legendBurst': "⚡N = N finds land in one wave, not a trickle. Telegram caps how fast bots can send — you're maxed out; lower tiers aren't.",
+  'plan.invoiceDescTrial': '{hours} hours · ~{seconds}s interval · up to {limit} links',
+  'pay.okTrial': '✅ {plan} is on for the next {hours} hours.',
 
   'lang.choose': 'Choose the interface language:',
   'lang.set': '✅ Language switched to English.',
@@ -189,13 +199,13 @@ Example:
   'plan.name.turbo': 'Sniper Elite',
   'plan.name.elite_max': 'Elite Max 🔒',
   'plan.scarcity': '🔥 <b>Sniper Elite</b> — only a limited number of spots.',
-  'plan.scarcitySeats': '🔥 <b>Sniper Elite</b> — {left} of {cap} spots left.',
-  'plan.soldOut': '🔥 <b>Sniper Elite</b> — all {cap} spots are taken. One frees up when a subscription lapses.',
+  'plan.scarcitySeats': '🔥 <b>Sniper Elite</b> — only {left} spots left.',
+  'plan.soldOut': '🔥 <b>Sniper Elite</b> — all spots are taken. One frees up when a subscription lapses.',
   'plan.full': '🚫 {plan} is full right now — every spot is taken. Nothing was charged. A spot frees up when a subscription lapses.',
   'plan.refunded': '↩️ {plan} filled up while the payment was going through, so it was refunded in full. Nothing was charged.',
   'btn.soldOut': '{name} · no spots left',
   'plan.tiersHeader': '<b>Plans</b>',
-  'plan.tierRow': '{name} — {price} · checks every {interval}s · {links} links · burst {burst}',
+  'plan.tierRow': '{name} — {price} · checks every {interval}s · {links} links · ⚡{burst}',
   'plan.tierRowNoBurst': '{name} — {price} · checks every {interval}s · {links} links',
   'plan.addon': 'Extra links bought: +{count}',
   'plan.addonOffer': '➕ {links} links for {price} — on top of any paid plan.',
@@ -230,5 +240,6 @@ Example:
 
   // how an interval reads to a person
   'unit.sec': '{n}s',
+  'unit.hour': '{n}h',
   'unit.min': '{n}m',
 };

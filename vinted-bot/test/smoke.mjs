@@ -289,7 +289,7 @@ test('with a picture, help points at it instead of repeating it in text', () => 
       `${lang}: the picture version should be the shorter one`,
     );
     // everything that is not the example must survive both ways
-    for (const marker of ['🧵', '🛡', '⚙️', '⌨️']) {
+    for (const marker of ['🔎', '🧵', '⌨️']) {
       assert.ok(withPicture.includes(marker), `${lang}: section ${marker} lost`);
       assert.ok(written.includes(marker), `${lang}: section ${marker} lost`);
     }
@@ -403,6 +403,9 @@ test('escapes HTML in listing titles', () => {
 
 const parsed = parseSearchUrl('https://www.vinted.de/catalog?search_text=raf&price_to=300');
 store.upsertUser(1, 'owner');
+// every account starts on the floor now, and the floor is polled for nothing —
+// the monitor fixtures need an account that actually holds a plan
+store.setPlan.run('pro', store.now() + 86400, 1);
 const mkSearch = (name, chatId, threadId) => {
   const info = store.insertSearch.run({
     user_id: 1, name, url: parsed.normalizedUrl, domain: parsed.domain,
@@ -471,15 +474,15 @@ test('identical searches share one canonical key', () => {
 
 test('disabled monitoring removes searches from the due queue', () => {
   store.db.prepare('UPDATE searches SET next_run_at = 0').run();
-  assert.ok(store.dueSearches.all(store.now(), 10).length > 0);
+  assert.ok(store.dueSearches.all(store.now(), store.now(), 10).length > 0);
   store.setMonitoring.run(0, 1);
-  assert.equal(store.dueSearches.all(store.now(), 10).length, 0);
+  assert.equal(store.dueSearches.all(store.now(), store.now(), 10).length, 0);
   store.setMonitoring.run(1, 1);
 });
 
-test('plan expiry falls back to free', () => {
+test('plan expiry falls back to the floor', () => {
   store.setPlan.run('pro', store.now() - 10, 1);
-  assert.equal(store.effectivePlan(store.getUser(1)), 'free');
+  assert.equal(store.effectivePlan(store.getUser(1)), 'locked');
   store.setPlan.run('pro', store.now() + 86400, 1);
   assert.equal(store.effectivePlan(store.getUser(1)), 'pro');
 });
@@ -592,8 +595,8 @@ test('bought links stack on the plan and die with it', () => {
   // the plan lapses: the add-on it was sold on top of goes with it
   store.setPlan.run('basic', store.now() - 10, 8100);
   const lapsed = store.getUser(8100);
-  assert.equal(store.effectivePlan(lapsed), 'free');
-  assert.equal(lapsed.plan, 'free', 'the row itself is retired, not just read as free');
+  assert.equal(store.effectivePlan(lapsed), 'locked');
+  assert.equal(lapsed.plan, 'locked', 'the row itself is retired, not just read as lapsed');
   assert.equal(lapsed.extra_links, 0, 'extra links cannot outlive the plan that carried them');
 });
 
@@ -708,21 +711,24 @@ test('the menu is an inline keyboard, not a keyboard pinned to the chat', () => 
   const buttons = kb.inline_keyboard.flat();
   assert.deepEqual(
     buttons.map((b) => b.callback_data),
-    ['m:add', 'm:list', 'm:toggle', 'm:help'],
-    'the front menu is four actions',
+    ['m:add', 'm:list', 'm:toggle', 'm:plan', 'm:help'],
+    'four things a user does, and Help under them',
   );
-  assert.equal(kb.inline_keyboard.length, 2, 'two rows of two — no scrolling');
-  assert.ok(kb.inline_keyboard.every((row) => row.length === 2));
+  assert.equal(kb.inline_keyboard.length, 3, 'a 2x2 grid with one button beneath it');
+  assert.deepEqual(kb.inline_keyboard.map((row) => row.length), [2, 2, 1]);
   assert.ok(buttons.every((b) => typeof b.callback_data === 'string'), 'every button carries an action');
 });
 
-test('plan, language and chats moved one level down, into help', () => {
+test('what someone pays for is on the front menu, not behind Help', () => {
   const front = mainMenu('ru', {}).inline_keyboard.flat().map((b) => b.callback_data);
-  for (const moved of ['m:plan', 'm:lang', 'm:chats']) {
-    assert.ok(!front.includes(moved), `${moved} must not be on the front menu`);
+  assert.ok(front.includes('m:plan'), 'Plan is one of the four');
+  assert.equal(front.at(-1), 'm:help', 'and Help is the one below them');
+  for (const stillBehindHelp of ['m:lang', 'm:chats']) {
+    assert.ok(!front.includes(stillBehindHelp), `${stillBehindHelp} is set once and forgotten`);
   }
   const help = helpKb('ru').inline_keyboard.flat().map((b) => b.callback_data);
-  assert.deepEqual(help, ['m:plan', 'm:lang', 'm:chats', 'm:home'], 'and they must be reachable there');
+  assert.deepEqual(help, ['m:lang', 'm:chats', 'm:home'], 'and they must be reachable there');
+  assert.ok(!help.includes('m:plan'), 'Plan graduated, it must not be in two places');
 });
 
 test('the toggle button shows the current state', () => {
@@ -858,6 +864,71 @@ test('admin commands go only to the admin own chat, in their language', () => {
 
 /* ---------------------------- plan tiers --------------------------------- */
 
+/* --------------------- the floor and the Scout trial --------------------- */
+
+test('Scout is sold by the hour, everything above it by the month', () => {
+  assert.ok(cfg.SELLABLE_PLANS.includes('free'), 'the way in is a purchase now');
+  assert.ok(cfg.starsFor('free') > 0, 'and it has a price');
+  assert.equal(cfg.planDurationSec('free'), cfg.config.payments.trialHours * 3600);
+  assert.equal(cfg.planDurationSec('basic'), cfg.config.payments.planDays * 86400);
+  assert.ok(
+    cfg.planDurationSec('free') < cfg.planDurationSec('basic'),
+    'a trial that outlasts a month is not a trial',
+  );
+});
+
+test('the floor is a real plan that grants nothing and is never sold', () => {
+  assert.ok(cfg.PLANS.includes('locked'));
+  assert.ok(cfg.isLocked('locked'));
+  assert.ok(!cfg.SELLABLE_PLANS.includes('locked'), 'nobody buys their way into holding nothing');
+  assert.ok(!cfg.PUBLIC_PLANS.includes('locked'), 'and it is not a row in the comparison');
+  assert.equal(cfg.searchLimitFor('locked'), 0);
+  assert.equal(cfg.starsFor('locked'), 0);
+  // it exists in its own right rather than falling through to a tier it is not
+  assert.notEqual(cfg.config.limits.locked, undefined, 'the floor needs its own limit, not free\'s');
+});
+
+test('a brand new account lands on the floor, not on a tier', () => {
+  const fresh = store.upsertUser(7500, 'newcomer', 'en');
+  assert.equal(fresh.plan, 'locked', 'signing up is not a purchase');
+  assert.equal(store.effectivePlan(fresh), 'locked');
+  assert.equal(fresh.plan_until, null, 'the floor does not expire, there is nothing to expire');
+});
+
+test('a trial that ran out is the floor again, lazily, on read', () => {
+  store.upsertUser(7501, 'trialist', 'en');
+  store.setPlan.run('free', store.now() + 3600, 7501);
+  assert.equal(store.effectivePlan(store.getUser(7501)), 'free', 'while it runs it is Scout');
+
+  store.setPlan.run('free', store.now() - 1, 7501);
+  const after = store.getUser(7501);
+  assert.equal(store.effectivePlan(after), 'locked');
+  assert.equal(after.plan, 'locked', 'the row is retired on read, like every other plan');
+});
+
+test('the floor and a lapsed plan are both polled for nothing', () => {
+  const mk = (uid) =>
+    store.insertSearch.run({
+      user_id: uid, name: 'floor', url: parsed.normalizedUrl, domain: parsed.domain,
+      canonical_key: parsed.canonicalKey, api_query: JSON.stringify(parsed.query),
+      dest_chat_id: uid, dest_thread_id: null, next_run_at: 0, created_at: store.now(),
+    }).lastInsertRowid;
+
+  store.upsertUser(7502, 'onfloor', 'en');
+  const onFloor = mk(7502);
+  const due = () => store.dueSearches.all(store.now(), store.now(), 100).map((s) => s.id);
+  assert.ok(!due().includes(onFloor), 'an account holding nothing costs the pool nothing');
+
+  // buying a plan starts it again by itself, with no other bookkeeping
+  store.setPlan.run('basic', store.now() + 86400, 7502);
+  assert.ok(due().includes(onFloor), 'and a purchase puts it straight back in the queue');
+
+  // and the clock running out takes it out again, without anyone opening the bot
+  store.setPlan.run('basic', store.now() - 1, 7502);
+  assert.ok(!due().includes(onFloor), 'expiry stops the polling, not just the next /plan screen');
+  store.deleteSearch.run(onFloor, 7502);
+});
+
 test('the reserved tier exists, is hidden, and has no price', () => {
   assert.ok(cfg.PLANS.includes('elite_max'));
   assert.ok(cfg.isHiddenPlan('elite_max'), 'it must not appear in the public comparison');
@@ -890,7 +961,7 @@ test('paid speed rises with the tier, free and basic get no advantage', () => {
 test('every plan has its own polling and limits, none falls back to free', () => {
   // intervalFor() lands on free for an unknown plan, which would quietly make a
   // paid tier the slowest of all
-  for (const plan of cfg.PLANS.filter((p) => p !== 'free')) {
+  for (const plan of cfg.PLANS.filter((p) => p !== 'free' && p !== 'locked')) {
     assert.ok(cfg.intervalFor(plan) <= cfg.intervalFor('free'), `${plan} polls slower than free`);
     assert.ok(cfg.searchLimitFor(plan) > cfg.searchLimitFor('free'), `${plan} has free's link limit`);
   }
@@ -1356,6 +1427,7 @@ async function runCommand(text, fromId, extra = {}) {
 await (async () => {
   const UID = 5150;
   store.upsertUser(UID, 'menuser', 'ru');
+  store.setPlan.run('pro', store.now() + 86400, UID); // the floor cannot reach /add
 
   const startUpdate = () => textUpdate('/start', UID, [{ type: 'bot_command', offset: 0, length: 6 }]);
   const start = await drive(startUpdate(), UID);
@@ -1525,7 +1597,7 @@ await (async () => {
     assert.match(info, /4242/);
     assert.match(info, /Raf &lt;script&gt;/, 'search names are escaped too');
     assert.match(info, /отправлено 5/);
-    assert.match(info, new RegExp(LOCALES.ru['plan.name.free']), 'the plan name comes from the locale');
+    assert.match(info, new RegExp(LOCALES.ru['plan.name.locked']), 'the plan name comes from the locale');
   });
 
   const noArg = await runCommand('/userinfo', 1);
@@ -1730,26 +1802,24 @@ await (async () => {
       !text.includes(t('en', 'plan.burst', { count: 1 })),
       `"burst 1" is advertised as a feature:\n${text}`,
     );
-    assert.ok(!/burst 1\b/.test(text), `a tier row still carries burst 1:\n${text}`);
+    assert.ok(!/⚡1\b/.test(text), `a tier row still carries a burst of 1:\n${text}`);
 
     // and the rows say it in the right shape, per tier
     for (const tier of ['free', 'basic']) {
-      assert.ok(
-        text.includes(
-          t('en', 'plan.tierRowNoBurst', {
-            name: LOCALES.en[`plan.name.${tier}`],
-            price: `$${cfg.usdFor(tier)}`,
-            interval: cfg.intervalFor(tier),
-            links: cfg.searchLimitFor(tier),
-          }),
-        ),
-        `${tier} should use the burst-free row:\n${text}`,
-      );
+      // the row minus its price tag: how Scout prints its length is priceTag's
+      // business and has its own test
+      const tail = t('en', 'plan.tierRowNoBurst', {
+        name: LOCALES.en[`plan.name.${tier}`],
+        price: '\u0000',
+        interval: cfg.intervalFor(tier),
+        links: cfg.searchLimitFor(tier),
+      }).split('\u0000')[1];
+      assert.ok(text.includes(tail), `${tier} should use the burst-free row:\n${text}`);
     }
     for (const tier of ['pro', 'turbo']) {
       assert.match(
         text,
-        new RegExp(`${LOCALES.en[`plan.name.${tier}`]}.*burst ${cfg.burstFor(tier)}`),
+        new RegExp(`${LOCALES.en[`plan.name.${tier}`]}.*⚡${cfg.burstFor(tier)}`),
         `${tier} really has a burst and must still show it:\n${text}`,
       );
     }
@@ -1770,7 +1840,7 @@ await (async () => {
       `the upsell multiplies a burst the tier does not have:\n${text}`,
     );
     assert.match(text, /checks 5× more often/, 'the honest parts of the upsell survive');
-    assert.ok(text.includes(`burst ${cfg.burstFor('pro')}`), "and Ranger's own row still names its burst");
+    assert.ok(text.includes(`⚡${cfg.burstFor('pro')}`), "and Ranger's own row still names its burst");
   });
 
   // the same reader, the same tier, with a burst configured: the line is not
@@ -1787,12 +1857,111 @@ await (async () => {
     );
   });
 
+  /* --------------- the trial, the floor, and the plan screen ------------- */
+
+  const TRIAL = 7600;
+  store.upsertUser(TRIAL, 'trialbuyer', 'en');
+  const lockedScreen = await drive(pressUpdate('m:plan', TRIAL), TRIAL);
+
+  test('an account holding nothing is told so, and offered the way out', () => {
+    const text = lockedScreen.find((c) => c.method === 'editMessageText').payload.text;
+    assert.ok(text.includes(LOCALES.en['plan.name.locked']), `the header names the state:\n${text}`);
+    assert.ok(text.includes(LOCALES.en['plan.lockedNote']), 'and says the searches are not running');
+    assert.ok(!text.includes(LOCALES.en['plan.interval'].split('{')[0]), 'a floor has no check interval to quote');
+    const buttons = lockedScreen
+      .find((c) => c.method === 'editMessageText')
+      .payload.reply_markup.inline_keyboard.flat();
+    assert.ok(buttons.some((b) => b.callback_data === 'buy:free'), 'Scout is buyable from here');
+  });
+
+  const lockedAdd = await drive(pressUpdate('m:add', TRIAL), TRIAL);
+  test('and /add says there is no plan rather than "limit reached"', () => {
+    const text = lockedAdd.find((c) => c.method === 'editMessageText').payload.text;
+    assert.ok(text.includes('🔒'), `expected the locked refusal, got:\n${text}`);
+    assert.ok(!text.includes('vinted.de/catalog'), 'the URL prompt must not open');
+    const buttons = lockedAdd.find((c) => c.method === 'editMessageText').payload.reply_markup.inline_keyboard.flat();
+    assert.ok(buttons.some((b) => b.callback_data === 'm:plan'), 'the way out is one tap away');
+  });
+
+  // buy it: pre-checkout, then the payment itself
+  store.setPlan.run('free', store.now() + cfg.config.payments.trialHours * 3600, TRIAL);
+  const trialScreen = await drive(pressUpdate('m:plan', TRIAL), TRIAL);
+
+  test('a running trial counts down instead of naming a date', () => {
+    const text = trialScreen.find((c) => c.method === 'editMessageText').payload.text;
+    assert.match(text, /Trial: \d+h \d+m left/, `no countdown in:\n${text}`);
+    assert.ok(!text.includes(LOCALES.en['plan.until'].split('{')[0]), 'a date is for the monthly plans');
+    assert.ok(text.includes(LOCALES.en['plan.name.free']), 'and it names Scout');
+  });
+
+  test('the trial carries its length in the price column', () => {
+    const text = trialScreen.find((c) => c.method === 'editMessageText').payload.text;
+    // $1 sitting under $9/$19/$79 reads as a dollar a month unless it says otherwise
+    assert.ok(
+      text.includes(`$${cfg.usdFor('free')}/${cfg.config.payments.trialHours}h`),
+      `Scout's price does not say how long it lasts:\n${text}`,
+    );
+    assert.ok(!/just \+\$\d+ a month/.test(text), 'and a day-to-month price delta is not offered');
+  });
+
+  test('the tier list carries both markers and explains them underneath', () => {
+    const text = trialScreen.find((c) => c.method === 'editMessageText').payload.text;
+    assert.ok(text.includes(`⚡${cfg.burstFor('pro')}`), `Ranger's burst reads as a bolt:\n${text}`);
+    assert.ok(text.includes(`⚡${cfg.burstFor('turbo')}`), "and so does Sniper Elite's");
+    assert.ok(!/burst \d/i.test(text), 'the word "burst" is gone from the rows');
+    assert.ok(text.includes(LOCALES.en['plan.legendGroup']), 'the 👥 note is there');
+    assert.ok(text.includes(LOCALES.en['plan.legendBurst']), 'the ⚡ note is there');
+    // the legend belongs under the tiers, not above them
+    assert.ok(
+      text.indexOf(LOCALES.en['plan.legendGroup']) > text.indexOf(LOCALES.en['plan.tiersHeader']),
+      'the footnote must sit below the list it annotates',
+    );
+  });
+
+  test('the add-on is not on sale anywhere on the screen', () => {
+    const screen = trialScreen.find((c) => c.method === 'editMessageText');
+    const buttons = screen.payload.reply_markup.inline_keyboard.flat();
+    assert.ok(!buttons.some((b) => b.callback_data === 'buy:addon'), 'no button opens it');
+    assert.ok(
+      !screen.payload.text.includes(LOCALES.en['plan.addonOffer'].split('{')[0]),
+      'and the offer line is gone from the text',
+    );
+  });
+
+  // someone holding more searches than the tier they are on now allows: the
+  // limit moved, their searches did not
+  const limitBefore = cfg.config.limits.basic.searches;
+  cfg.config.limits.basic.searches = 1;
+  store.setPlan.run('basic', store.now() + 86400, TRIAL);
+  for (const name of ['a', 'b']) {
+    store.insertSearch.run({
+      user_id: TRIAL, name, url: parsed.normalizedUrl, domain: parsed.domain,
+      canonical_key: parsed.canonicalKey, api_query: JSON.stringify(parsed.query),
+      dest_chat_id: TRIAL, dest_thread_id: null, next_run_at: 0, created_at: store.now(),
+    });
+  }
+  const grandfathered = await drive(pressUpdate('m:plan', TRIAL), TRIAL);
+  cfg.config.limits.basic.searches = limitBefore;
+  for (const s of store.listSearches.all(TRIAL)) store.deleteSearch.run(s.id, TRIAL);
+
+  test('a limit that moved under someone says so instead of just reading wrong', () => {
+    const text = grandfathered.find((c) => c.method === 'editMessageText').payload.text;
+    assert.match(text, /Link limit: 1/);
+    assert.match(text, /In use: 2/);
+    assert.ok(
+      text.includes(LOCALES.en['plan.grandfathered']),
+      `nothing explains why "in use" beats the limit:\n${text}`,
+    );
+  });
+
+  store.setPlan.run('locked', null, TRIAL);
+
   const rejected = await runCommand('/grant 4242 platinum 30', 1);
   test('/grant refuses a plan that does not exist', () => {
     assert.match(rejected, /Usage/);
     assert.equal(store.getUser(4242).plan, 'elite_max', 'the account is left alone');
   });
-  store.setPlan.run('free', null, 4242);
+  store.setPlan.run('locked', null, 4242);
 
   const askStart = await runCommand('/setstartimage', 1);
   test('a picture command asks for the photo and waits for it', () => {
@@ -1855,7 +2024,7 @@ await (async () => {
     assert.ok(turbo, 'the tier is still listed');
     assert.match(turbo.text, /no spots left/i, `the button still offers a sale: ${turbo.text}`);
     assert.ok(!turbo.text.includes('⭐'), 'and it must not show a price it will not honour');
-    assert.match(edit.payload.text, /0 of \d+ spots|all \d+ spots/i, 'the scarcity line tells the truth');
+    assert.match(edit.payload.text, /all spots are taken/i, 'the scarcity line tells the truth');
   });
 
   const tapped = await drive(pressUpdate('buy:turbo', BUYER), BUYER);
@@ -1902,7 +2071,7 @@ await (async () => {
     const refund = paidAnyway.find((c) => c.method === 'refundStarPayment');
     assert.ok(refund, 'the stars must go back');
     assert.equal(refund.payload.telegram_payment_charge_id, 'charge-1');
-    assert.equal(store.getUser(BUYER).plan, 'free', 'and no tier is handed out');
+    assert.equal(store.getUser(BUYER).plan, 'locked', 'and no tier is handed out');
     const told = paidAnyway.find((c) => c.method === 'sendMessage');
     assert.match(told.payload.text, /refunded/i);
   });
@@ -1910,7 +2079,7 @@ await (async () => {
   const grantFull = await runCommand(`/grant ${BUYER} turbo 30`, 1);
   test('/grant respects the cap too, or the number is just decoration', () => {
     assert.match(grantFull, /MAX_SNIPER_ELITE_SEATS/, 'it names the setting to raise');
-    assert.equal(store.getUser(BUYER).plan, 'free', 'nobody is seated past the cap');
+    assert.equal(store.getUser(BUYER).plan, 'locked', 'nobody is seated past the cap');
   });
 
   cfg.config.seats.turbo = capacity.seats('turbo').used + 1; // one spot opens

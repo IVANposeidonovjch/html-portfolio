@@ -1,7 +1,7 @@
 import { Bot, GrammyError, InlineKeyboard } from 'grammy';
 import {
-  PLANS, PUBLIC_PLANS, SEAT_ENV_VAR, SELLABLE_PLANS, burstFor, config, intervalFor, searchLimitFor,
-  starsFor, usdFor,
+  PLANS, PUBLIC_PLANS, SEAT_ENV_VAR, SELLABLE_PLANS, burstFor, config, intervalFor, isLocked,
+  planDurationSec, searchLimitFor, starsFor, usdFor,
 } from '../config.js';
 import * as store from '../db/index.js';
 import { admits, seatAvailableFor, seats, stagger } from '../monitor/capacity.js';
@@ -13,7 +13,7 @@ import { helpParts, helpText } from './help.js';
 import { adoptPhoto, forgetImage, imageFor } from './images.js';
 import {
   backRow, cancelKb, chatsKb, confirmDeleteKb, destinationKb, helpKb, langKb, mainMenu, menuOnlyKb,
-  searchKb, searchListKb, topicKb,
+  planKb, searchKb, searchListKb, topicKb,
 } from './keyboards.js';
 
 /** Short-lived per-user wizard state (add-link / rename flows). */
@@ -87,14 +87,24 @@ function nextTierPitch(lang, plan) {
       }),
     );
   }
-  if (delta > 0) lines.push(t(lang, 'plan.next.price', { delta }));
+  // A day costs a dollar and a month costs nine: the difference between them is
+  // not "+$8 a month", so the trial gets no price line at all. The comparison
+  // right above already prints what the next tier costs.
+  if (delta > 0 && plan !== 'free') lines.push(t(lang, 'plan.next.price', { delta }));
   return lines;
 }
 
 /** Plan names are product copy, so they live in the locales like everything else. */
 const planName = (lang, plan) => t(lang, `plan.name.${plan}`);
 
-const priceTag = (plan) => (usdFor(plan) ? `$${usdFor(plan)}` : '$0');
+/**
+ * Scout carries its length: a dollar next to $9, $19 and $79 in one column
+ * reads as a dollar a month unless the row says it is a dollar for a day.
+ */
+const priceTag = (plan) => {
+  if (!usdFor(plan)) return '$0';
+  return plan === 'free' ? `$${usdFor(plan)}/${config.payments.trialHours}h` : `$${usdFor(plan)}`;
+};
 
 /**
  * A burst of one is not a burst — it is the plain steady rate, one listing at a
@@ -110,9 +120,7 @@ const hasBurst = (plan) => burstFor(plan) > 1;
 function scarcityLine(lang) {
   const seat = seats('turbo');
   if (!seat.cap) return t(lang, 'plan.scarcity');
-  return seat.left
-    ? t(lang, 'plan.scarcitySeats', { left: seat.left, cap: seat.cap })
-    : t(lang, 'plan.soldOut', { cap: seat.cap });
+  return seat.left ? t(lang, 'plan.scarcitySeats', { left: seat.left }) : t(lang, 'plan.soldOut');
 }
 
 /**
@@ -120,7 +128,16 @@ function scarcityLine(lang) {
  * bought on top of it. Add-ons ride on a paid plan and are cleared with it.
  */
 const linkLimit = (user, plan) =>
-  searchLimitFor(plan) + (plan === 'free' ? 0 : user.extra_links || 0);
+  searchLimitFor(plan) + (isLocked(plan) ? 0 : user.extra_links || 0);
+
+/** "23h 40m" left, in the abbreviations every language shares. */
+function leftToRun(lang, seconds) {
+  const left = Math.max(0, seconds);
+  const hours = Math.floor(left / 3600);
+  const minutes = Math.floor((left % 3600) / 60);
+  if (!hours) return t(lang, 'unit.min', { n: minutes });
+  return `${t(lang, 'unit.hour', { n: hours })} ${t(lang, 'unit.min', { n: minutes })}`;
+}
 
 /** Register the user on first contact, seeding the language from Telegram. */
 function who(ctx) {
@@ -476,6 +493,11 @@ export function createBot() {
     const { user, lang } = who(ctx);
     const plan = store.effectivePlan(user);
     const limit = linkLimit(user, plan);
+    // An account holding nothing is not over its limit, it has no plan — those
+    // are different problems and "delete one or upgrade" only fits the first.
+    if (isLocked(plan)) {
+      return render(ctx, t(lang, 'add.locked'), { parse_mode: 'HTML', reply_markup: planKb(lang) });
+    }
     if (store.countSearches.get(user.tg_id).n >= limit) {
       return render(ctx, t(lang, 'add.limit', { plan: planName(lang, plan), limit }), {
         reply_markup: menuOnlyKb(lang),
@@ -740,7 +762,9 @@ export function createBot() {
    * actually bought, and its own picture when one is set.
    */
   async function announceTier(userId, plan) {
-    if (plan === 'free') return;
+    // Scout has no welcome of its own: the trial confirmation already says what
+    // it bought, and there is no tier copy written for it to fall back on.
+    if (plan === 'free' || isLocked(plan)) return;
     const target = store.getUser(userId);
     const lang = target?.lang || 'en';
     const text = t(lang, `tier.welcome.${plan}`, {
@@ -766,20 +790,34 @@ export function createBot() {
   const showPlan = async (ctx) => {
     const { user, lang } = who(ctx);
     const plan = store.effectivePlan(user);
-    const addon = config.payments.addon;
+    const limit = linkLimit(user, plan);
+    const used = store.countSearches.get(user.tg_id).n;
 
-    const lines = [
-      t(lang, 'plan.title', { plan: planName(lang, plan) }),
-      t(lang, 'plan.interval', { seconds: intervalFor(plan) }),
-      t(lang, 'plan.limit', { limit: linkLimit(user, plan) }),
-      t(lang, 'plan.used', { count: store.countSearches.get(user.tg_id).n }),
-    ];
+    const lines = [t(lang, 'plan.title', { plan: planName(lang, plan) })];
+    if (isLocked(plan)) {
+      // nothing below is a feature list any more — say what the state is
+      lines.push(t(lang, 'plan.lockedNote'));
+    } else {
+      lines.push(t(lang, 'plan.interval', { seconds: intervalFor(plan) }));
+    }
+    lines.push(
+      t(lang, 'plan.limit', { limit }),
+      t(lang, 'plan.used', { count: used }),
+    );
+    // A limit that moved under someone's feet: they kept what they had, and the
+    // line says so before they go looking for the searches they think they lost.
+    if (used > limit && limit > 0) lines.push(t(lang, 'plan.grandfathered'));
     if (hasBurst(plan)) lines.push(t(lang, 'plan.burst', { count: burstFor(plan) }));
-    if (user.extra_links && plan !== 'free') {
+    if (user.extra_links && !isLocked(plan)) {
       lines.push(t(lang, 'plan.addon', { count: user.extra_links }));
     }
-    if (user.plan_until && plan !== 'free') {
-      lines.push(t(lang, 'plan.until', { date: new Date(user.plan_until * 1000).toISOString().slice(0, 10) }));
+    if (user.plan_until && !isLocked(plan)) {
+      // an hours-long trial is counted down; a month-long plan gets a date
+      lines.push(
+        plan === 'free'
+          ? t(lang, 'plan.trialLeft', { left: leftToRun(lang, user.plan_until - store.now()) })
+          : t(lang, 'plan.until', { date: new Date(user.plan_until * 1000).toISOString().slice(0, 10) }),
+      );
     }
 
     // The comparison lists what is for sale. The reserved tier is not in
@@ -797,11 +835,9 @@ export function createBot() {
           }),
       );
     }
+    lines.push('', t(lang, 'plan.legendGroup'), t(lang, 'plan.legendBurst'));
     lines.push(...nextTierPitch(lang, plan));
     lines.push('', scarcityLine(lang));
-    if (addon.stars) {
-      lines.push(t(lang, 'plan.addonOffer', { links: addon.links, price: `$${addon.usd}` }));
-    }
 
     const kb = new InlineKeyboard();
     for (const tier of SELLABLE_PLANS) {
@@ -812,9 +848,6 @@ export function createBot() {
         ? `${planName(lang, tier)} · ${starsFor(tier)} ⭐`
         : t(lang, 'btn.soldOut', { name: planName(lang, tier) });
       kb.text(label, `buy:${tier}`).row();
-    }
-    if (addon.stars) {
-      kb.text(t(lang, 'btn.addon', { links: addon.links, stars: addon.stars }), 'buy:addon').row();
     }
     await render(ctx, lines.join('\n'), { parse_mode: 'HTML', reply_markup: backRow(kb, lang) });
   };
@@ -830,11 +863,16 @@ export function createBot() {
     const what = ctx.match[1];
     await ctx.answerCallbackQuery();
 
+    // The add-on is no longer offered anywhere: flat pricing across tiers did
+    // not reflect what a link actually costs on a fast tier versus a slow one.
+    // The handler stays so an invoice someone still has open is honoured, and
+    // so turning it back on is one ADDON_PRICE_STARS away — but nothing on the
+    // plan screen opens it any more, and more capacity means the next tier up.
     if (what === 'addon') {
       const addon = config.payments.addon;
       if (!addon.stars) return;
-      // extra links sit on top of a plan; on free there is nothing to sit on
-      if (store.effectivePlan(user) === 'free') {
+      // extra links sit on top of a plan; with no plan there is nothing to sit on
+      if (isLocked(store.effectivePlan(user))) {
         return ctx.reply(t(lang, 'addon.needPlan'));
       }
       return ctx.api.sendInvoice(
@@ -856,11 +894,17 @@ export function createBot() {
     await ctx.api.sendInvoice(
       ctx.chat.id,
       `Vinted Monitor ${planName(lang, what)}`,
-      t(lang, 'plan.invoiceDesc', {
-        days: config.payments.planDays,
-        seconds: intervalFor(what),
-        limit: searchLimitFor(what),
-      }),
+      what === 'free'
+        ? t(lang, 'plan.invoiceDescTrial', {
+            hours: config.payments.trialHours,
+            seconds: intervalFor(what),
+            limit: searchLimitFor(what),
+          })
+        : t(lang, 'plan.invoiceDesc', {
+            days: config.payments.planDays,
+            seconds: intervalFor(what),
+            limit: searchLimitFor(what),
+          }),
       `plan:${what}`,
       'XTR',
       [{ label: planName(lang, what), amount: starsFor(what) }],
@@ -914,8 +958,12 @@ export function createBot() {
 
     const base = Math.max(store.now(), user.plan_until || 0);
     const upgrade = store.effectivePlan(user) !== what;
-    store.setPlan.run(what, base + config.payments.planDays * 86400, user.tg_id);
-    await ctx.reply(t(lang, 'pay.ok', { plan: planName(lang, what), days: config.payments.planDays }));
+    store.setPlan.run(what, base + planDurationSec(what), user.tg_id);
+    await ctx.reply(
+      what === 'free'
+        ? t(lang, 'pay.okTrial', { plan: planName(lang, what), hours: config.payments.trialHours })
+        : t(lang, 'pay.ok', { plan: planName(lang, what), days: config.payments.planDays }),
+    );
     // an extension of the same plan is not a new tier to celebrate
     if (upgrade) await announceTier(user.tg_id, what);
   });
@@ -932,7 +980,7 @@ export function createBot() {
 
     // The cap is a real number or it is nothing: handing out an eleventh seat
     // of ten by hand is exactly how "limited spots" stops being true.
-    if (plan !== 'free' && !seatAvailableFor(plan, Number(id))) {
+    if (!isLocked(plan) && !seatAvailableFor(plan, Number(id))) {
       const seat = seats(plan);
       return ctx.reply(
         `Мест на ${plan} нет: занято ${seat.used}/${seat.cap}. ` +
@@ -940,7 +988,8 @@ export function createBot() {
       );
     }
 
-    const until = plan === 'free' ? null : store.now() + (Number(days) || 30) * 86400;
+    // only the floor is open-ended; everything else is granted for a while
+    const until = isLocked(plan) ? null : store.now() + (Number(days) || 30) * 86400;
     const before = store.effectivePlan(store.getUser(Number(id)));
     store.setPlan.run(plan, until, Number(id));
     // a hand-assigned plan starts clean: bought links belonged to the old one
@@ -961,7 +1010,7 @@ export function createBot() {
     const lines = [`<b>Пользователи: ${rows.length}</b>`, ''];
     for (const row of rows) {
       const plan = store.effectivePlan(row);
-      const expired = row.plan !== 'free' && plan === 'free';
+      const expired = !isLocked(row.plan) && isLocked(plan);
       lines.push(
         `<code>${row.tg_id}</code> ${row.username ? '@' + esc(row.username) : '—'} · ` +
           `${planName('ru', plan)}${expired ? ` (был ${planName('ru', row.plan)}, истёк)` : ''} · ` +

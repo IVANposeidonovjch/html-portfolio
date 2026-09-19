@@ -11,6 +11,9 @@ export const mainMenu = (lang, { monitoring = true } = {}) =>
   new InlineKeyboard()
     .text(t(lang, 'btn.add'), 'm:add').text(t(lang, 'btn.list'), 'm:list').row()
     .text(t(lang, monitoring ? 'btn.toggleOn' : 'btn.toggleOff'), 'm:toggle')
+    .text(t(lang, 'btn.plan'), 'm:plan').row()
+    // Help is not one of the four things a user does every day, so it sits
+    // under the grid on a row of its own rather than inside it.
     .text(t(lang, 'btn.help'), 'm:help');
 
 /** Every screen that replaces the menu needs a way back to it. */
@@ -83,17 +86,20 @@ export const langKb = (current) => {
 };
 
 /**
- * The second level. Plan, language and chats are set once and then forgotten,
- * so they sit behind Help instead of competing with the four things a user
- * actually does every day.
+ * The second level. Language and chats are set once and then forgotten, so they
+ * sit behind Help. Plan used to live here too and has been promoted to the
+ * front menu — what someone is paying for is not a setting.
  */
 export const helpKb = (lang, { support = false } = {}) => {
   const kb = new InlineKeyboard()
-    .text(t(lang, 'btn.plan'), 'm:plan').text(t(lang, 'btn.lang'), 'm:lang').row()
-    .text(t(lang, 'btn.chats'), 'm:chats').row();
+    .text(t(lang, 'btn.lang'), 'm:lang').text(t(lang, 'btn.chats'), 'm:chats').row();
   if (support) kb.text(t(lang, 'btn.support'), 'm:support').row();
   return backRow(kb, lang);
 };
 
 /** Plan screen and other read-only views: just a way home. */
 export const menuOnlyKb = (lang) => backRow(new InlineKeyboard(), lang);
+
+/** A dead end that is really a "go buy something": lead with the way out of it. */
+export const planKb = (lang) =>
+  backRow(new InlineKeyboard().text(t(lang, 'btn.plan'), 'm:plan').row(), lang);

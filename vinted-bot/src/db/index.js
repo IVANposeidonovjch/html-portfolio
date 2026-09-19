@@ -26,15 +26,44 @@ for (const [table, column, ddl] of [
 
 export const now = () => Math.floor(Date.now() / 1000);
 
+/**
+ * One-time: 'free' used to mean a permanent tier that cost nothing. It is now
+ * Scout, a purchase that runs out in a day, so the accounts that were parked on
+ * it forever move to the floor — otherwise they would keep a tier that is on
+ * sale, for free, for good.
+ *
+ * Only rows with no expiry are touched: a row with a plan_until was bought and
+ * is the lazy-expiry path's business, not this one. Marked done in `settings`
+ * so a restart cannot demote somebody who has since paid.
+ */
+{
+  const done = db.prepare("SELECT value FROM settings WHERE key = 'migrated_free_floor'").get();
+  if (!done) {
+    const moved = db
+      .prepare("UPDATE users SET plan = 'locked' WHERE plan = 'free' AND plan_until IS NULL")
+      .run();
+    db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run(
+      'migrated_free_floor',
+      String(moved.changes),
+      now(),
+    );
+    if (moved.changes) console.log(`[db] ${moved.changes} free-forever account(s) moved to the floor`);
+  }
+}
+
 /* ------------------------------- users -------------------------------- */
 
+// The plan is written out rather than left to the column default: an existing
+// database still carries DEFAULT 'free' from before Scout was sold, and a new
+// account must land on the floor on every database, not only a fresh one.
 const insertUser = db.prepare(
-  `INSERT INTO users (tg_id, username, lang, kb_cleared, created_at) VALUES (?, ?, ?, 1, ?)
+  `INSERT INTO users (tg_id, username, lang, kb_cleared, plan, created_at)
+   VALUES (?, ?, ?, 1, 'locked', ?)
    ON CONFLICT(tg_id) DO UPDATE SET username = excluded.username`,
 );
 const selectUser = db.prepare('SELECT * FROM users WHERE tg_id = ?');
 const lapsePlan = db.prepare(
-  "UPDATE users SET plan = 'free', plan_until = NULL, extra_links = 0 WHERE tg_id = ?",
+  "UPDATE users SET plan = 'locked', plan_until = NULL, extra_links = 0 WHERE tg_id = ?",
 );
 
 /**
@@ -48,7 +77,7 @@ function readUser(tgId) {
   const user = selectUser.get(tgId);
   if (!user) return user;
   const lapsed = user.plan_until && user.plan_until < now();
-  if (lapsed && (user.plan !== 'free' || user.extra_links)) {
+  if (lapsed && (user.plan !== 'locked' || user.extra_links)) {
     lapsePlan.run(tgId);
     return selectUser.get(tgId);
   }
@@ -65,9 +94,10 @@ export const markKbCleared = db.prepare('UPDATE users SET kb_cleared = 1 WHERE t
 export const getUser = (tgId) => readUser(tgId);
 
 export function effectivePlan(user) {
-  if (!user) return 'free';
-  if (user.plan === 'free') return 'free';
-  if (user.plan_until && user.plan_until < now()) return 'free';
+  if (!user) return 'locked';
+  if (user.plan === 'locked') return 'locked';
+  // Scout included: everything is bought now, so everything can run out
+  if (user.plan_until && user.plan_until < now()) return 'locked';
   return user.plan;
 }
 
@@ -138,10 +168,19 @@ export const redirectSearch = db.prepare(
   'UPDATE searches SET dest_chat_id = ?, dest_thread_id = ? WHERE id = ? AND user_id = ?',
 );
 
+/**
+ * What to poll now. An account that holds nothing is polled for nothing: the
+ * floor and a plan whose paid time has run out are both excluded here rather
+ * than only at read time, so searches stop the moment the clock passes even if
+ * their owner never opens the bot again — and start again by themselves the
+ * moment a plan is bought.
+ */
 export const dueSearches = db.prepare(
   `SELECT s.* FROM searches s
    JOIN users u ON u.tg_id = s.user_id
    WHERE s.enabled = 1 AND u.monitoring_enabled = 1 AND s.next_run_at <= ?
+     AND u.plan <> 'locked'
+     AND (u.plan_until IS NULL OR u.plan_until > ?)
    ORDER BY s.next_run_at
    LIMIT ?`,
 );
