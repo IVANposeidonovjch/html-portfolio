@@ -55,7 +55,7 @@ Beispiel:
     '⏳ Gerade sind alle Überwachungsplätze belegt, der Link wurde nicht angelegt. Versuch es in ein paar Minuten noch einmal — es werden laufend welche frei.',
 
   'add.locked':
-    '🔒 Du hast gerade keinen Tarif, es lässt sich nichts anlegen. <b>Scout</b> ist ein Tag davon zum Preis eines Kaffees — öffne unten „Tarif“.',
+    '🔒 Du hast gerade keinen Tarif, es lässt sich nichts anlegen. <b>Scout</b> ist eine Woche davon zum Preis eines Kaffees — öffne unten „Tarif“.',
 
   'url.err.notLink': 'Das sieht nicht nach einem Link aus.',
   'url.err.scheme': 'Es muss ein http(s)-Link sein.',
@@ -137,6 +137,24 @@ Beispiel:
   'trial.window.week': '1 Woche',
   'trial.window.days': '{n} Tage',
   'trial.window.hours': '{n} Std.',
+  'plan.renewsOn': '🔄 Verlängert sich automatisch am {date}',
+  'plan.cancelledUntil': '⏹ Gekündigt — Zugang bis {date}',
+  'plan.renewFailed': '⚠️ Verlängerung fehlgeschlagen — zu wenig Stars. Lad auf, Telegram versucht es erneut; Zugang bis {date}',
+  'plan.invoiceDescSub': 'Alle 30 Tage · ~{seconds} Sek Intervall · bis zu {limit} Links · jederzeit kündbar',
+  'plan.subOffer':
+    '🔄 <b>{plan}</b> — {stars} ⭐ alle {days} Tage, automatisch abgebucht. Jederzeit in /plan kündbar; der bezahlte Zeitraum läuft bis zu seinem Datum weiter.',
+  'plan.subUnavailable': '⚠️ Das Abo ließ sich gerade nicht öffnen. Versuch es in einer Minute noch einmal.',
+  'btn.subscribe': '{plan} abonnieren · {stars} ⭐',
+  'btn.subCancel': '⏹ Verlängerung stoppen',
+  'btn.subResume': '🔄 Verlängerung wieder an',
+  'pay.okSub': '✅ {plan} ist aktiv und verlängert sich automatisch am {date}. Kündigen kannst du jederzeit in /plan.',
+  'sub.cancelled': '⏹ Die automatische Verlängerung ist aus. <b>{date}</b> ist der letzte Tag des bereits bezahlten Zeitraums — bis dahin ändert sich nichts.',
+  'sub.cancelledShort': 'Verlängerung aus',
+  'sub.resumed': '🔄 Die automatische Verlängerung ist wieder an.',
+  'sub.resumedShort': 'Verlängerung an',
+  'sub.failed': '⚠️ {plan} konnte nicht verlängert werden — es fehlen {stars} ⭐ auf deinem Guthaben. Lad auf, Telegram versucht es erneut; der Tarif läuft bis <b>{date}</b>.',
+  'sub.none': 'Hier gibt es nichts zu kündigen.',
+  'sub.changeFailed': 'Telegram hat die Änderung gerade nicht zugelassen. Versuch es in einer Minute.',
 
   'lang.choose': 'Sprache der Oberfläche wählen:',
   'lang.set': '✅ Sprache auf Deutsch umgestellt.',

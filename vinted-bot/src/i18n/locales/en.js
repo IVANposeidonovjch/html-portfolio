@@ -55,7 +55,7 @@ Example:
     '⏳ Every monitoring slot is busy right now, so this link was not added. Try again in a few minutes — slots free up all the time.',
 
   'add.locked':
-    '🔒 You have no plan right now, so there is nowhere to add a link. <b>Scout</b> is a day of it for the price of a coffee — open Plan below.',
+    '🔒 You have no plan right now, so there is nowhere to add a link. <b>Scout</b> is a week of it for the price of a coffee — open Plan below.',
 
   'url.err.notLink': "That doesn't look like a link.",
   'url.err.scheme': 'An http(s) link is required.',
@@ -137,6 +137,24 @@ Example:
   'trial.window.week': '1 week',
   'trial.window.days': '{n} days',
   'trial.window.hours': '{n} hours',
+  'plan.renewsOn': '🔄 Renews automatically on {date}',
+  'plan.cancelledUntil': '⏹ Cancelled — access until {date}',
+  'plan.renewFailed': '⚠️ Renewal failed — not enough Stars. Top it up and Telegram retries; access until {date}',
+  'plan.invoiceDescSub': 'Every 30 days · ~{seconds}s interval · up to {limit} links · cancel any time',
+  'plan.subOffer':
+    '🔄 <b>{plan}</b> — {stars} ⭐ every {days} days, charged automatically. Cancel any time in /plan; access runs to the date already paid for.',
+  'plan.subUnavailable': "⚠️ Couldn't open the subscription just now. Try again in a minute.",
+  'btn.subscribe': 'Subscribe to {plan} · {stars} ⭐',
+  'btn.subCancel': '⏹ Cancel auto-renewal',
+  'btn.subResume': '🔄 Resume auto-renewal',
+  'pay.okSub': '✅ {plan} is on and renews automatically on {date}. You can cancel any time in /plan.',
+  'sub.cancelled': '⏹ Auto-renewal is off. <b>{date}</b> is the last day of the period you already paid for — nothing changes before then.',
+  'sub.cancelledShort': 'Auto-renewal off',
+  'sub.resumed': '🔄 Auto-renewal is back on.',
+  'sub.resumedShort': 'Auto-renewal on',
+  'sub.failed': "⚠️ {plan} could not renew — your Star balance is short of {stars} ⭐. Top it up and Telegram tries again; the plan stays on until <b>{date}</b>.",
+  'sub.none': 'Nothing to cancel here.',
+  'sub.changeFailed': 'Telegram would not change the subscription just now. Try again in a minute.',
 
   'lang.choose': 'Choose the interface language:',
   'lang.set': '✅ Language switched to English.',

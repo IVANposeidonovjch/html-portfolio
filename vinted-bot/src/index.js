@@ -116,6 +116,14 @@ await publishCommands(bot.api, {
 });
 
 await bot.start({
-  allowed_updates: ['message', 'callback_query', 'pre_checkout_query', 'my_chat_member'],
+  // 'subscription' is not in Telegram's default set: leave it out and renewals,
+  // cancellations and failed charges simply never reach the bot.
+  allowed_updates: [
+    'message',
+    'callback_query',
+    'pre_checkout_query',
+    'my_chat_member',
+    'subscription',
+  ],
   onStart: (me) => logger.info(`bot @${me.username} online`),
 });

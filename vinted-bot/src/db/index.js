@@ -19,6 +19,12 @@ for (const [table, column, ddl] of [
   ['users', 'kb_cleared', 'INTEGER NOT NULL DEFAULT 0'],
   ['users', 'extra_links', 'INTEGER NOT NULL DEFAULT 0'],
   ['users', 'last_fomo_nudge_at', 'INTEGER'],
+  // A live Star subscription: the charge id is what cancels it, the state is
+  // what Telegram last told us about it. NULL on both means this plan was a
+  // one-off purchase — every plan bought before subscriptions existed, and
+  // every Scout trial — which is exactly how those keep working untouched.
+  ['users', 'sub_charge_id', 'TEXT'],
+  ['users', 'sub_state', 'TEXT'],
 ]) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
@@ -63,7 +69,9 @@ const insertUser = db.prepare(
 );
 const selectUser = db.prepare('SELECT * FROM users WHERE tg_id = ?');
 const lapsePlan = db.prepare(
-  "UPDATE users SET plan = 'locked', plan_until = NULL, extra_links = 0 WHERE tg_id = ?",
+  `UPDATE users SET plan = 'locked', plan_until = NULL, extra_links = 0,
+                    sub_charge_id = NULL, sub_state = NULL
+   WHERE tg_id = ?`,
 );
 
 /**
@@ -102,6 +110,33 @@ export function effectivePlan(user) {
 }
 
 export const setPlan = db.prepare('UPDATE users SET plan = ?, plan_until = ? WHERE tg_id = ?');
+
+/* --------------------------- star subscriptions ------------------------- */
+
+/**
+ * A subscription payment landed — the first one or a renewal. Telegram's own
+ * `subscription_expiration_date` is the authority on when it next runs out, so
+ * it is written straight in rather than computed from a period we guessed.
+ *
+ * MAX() is a guard, not decoration: a legacy plan can still have months left
+ * on it, and subscribing must never hand somebody less access than they had.
+ */
+export const applySubscriptionPayment = db.prepare(
+  `UPDATE users SET plan = ?, plan_until = MAX(COALESCE(plan_until, 0), ?),
+                    sub_charge_id = ?, sub_state = 'active'
+   WHERE tg_id = ?`,
+);
+
+/** Telegram told us the subscription changed state; the paid date is untouched. */
+export const setSubState = db.prepare('UPDATE users SET sub_state = ? WHERE tg_id = ?');
+
+/**
+ * A renewal failed on an empty Star balance. Keep the plan alive for the grace
+ * window so there is time to top up — never shortening what was already paid.
+ */
+export const graceSubscription = db.prepare(
+  "UPDATE users SET sub_state = 'failed', plan_until = MAX(COALESCE(plan_until, 0), ?) WHERE tg_id = ?",
+);
 
 /** Add-ons are tied to the plan that was active when they were bought. */
 export const addExtraLinks = db.prepare(

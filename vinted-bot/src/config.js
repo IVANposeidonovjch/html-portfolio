@@ -147,6 +147,25 @@ export const config = {
       turbo: num(process.env.PRICE_USD_TURBO, 79),
     },
     planDays: num(process.env.PLAN_DAYS, 30),
+
+    /**
+     * Real Telegram Star subscriptions: Telegram re-charges the balance itself
+     * every period and tells us about it, instead of the user having to come
+     * back and buy the same thing again.
+     *
+     * `periodSec` is not ours to pick — the Bot API accepts exactly 2592000 on
+     * createInvoiceLink and rejects anything else, which is also why Scout
+     * cannot be one: a seven-day trial is not a thirty-day subscription.
+     *
+     * `graceHours` is what a failed renewal buys. A cancelled subscription
+     * needs none — it was paid to its date and simply stops there — but a
+     * renewal that failed on an empty Star balance is somebody who meant to
+     * pay, so they keep the plan while they top up.
+     */
+    subscriptions: {
+      periodSec: 2592000,
+      graceHours: num(process.env.SUB_GRACE_HOURS, 48),
+    },
     // A week. Still expressed in hours so a shorter window stays configurable —
     // what the screens call it is derived from this, never hardcoded.
     trialHours: num(process.env.SCOUT_TRIAL_HOURS, 168),
@@ -192,6 +211,14 @@ export const isHiddenPlan = (plan) => !PUBLIC_PLANS.includes(plan);
 
 /** Everything a paid plan grants is gone here, so nothing is polled either. */
 export const isLocked = (plan) => plan === LOCKED_PLAN;
+
+/**
+ * Which tiers are sold as recurring subscriptions. Scout is not one: a Star
+ * subscription is fixed at thirty days and Scout is a seven-day trial, so it
+ * stays a single invoice that simply runs out.
+ */
+export const SUBSCRIPTION_PLANS = SELLABLE_PLANS.filter((plan) => plan !== 'free');
+export const isSubscriptionPlan = (plan) => SUBSCRIPTION_PLANS.includes(plan);
 
 /** Plans that see listings fast enough that a near-miss note would be a lie. */
 export const INSTANT_PLANS = ['turbo', 'elite_max'];

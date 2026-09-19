@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS users (
   last_fomo_nudge_at INTEGER,
   plan               TEXT    NOT NULL DEFAULT 'locked', -- locked | free | basic | pro | turbo | elite_max
   plan_until         INTEGER,                            -- unix seconds, NULL = never runs out
+  sub_charge_id      TEXT,                               -- Star subscription charge id, NULL = one-off purchase
+  sub_state          TEXT,                               -- active | canceled | failed, NULL = not a subscription
   monitoring_enabled INTEGER NOT NULL DEFAULT 1,
   created_at         INTEGER NOT NULL
 );

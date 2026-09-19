@@ -1362,6 +1362,9 @@ async function drive(update, fromId) {
   const calls = [];
   bot.api.config.use(async (prev, method, payload) => {
     calls.push({ method, payload });
+    // createInvoiceLink answers with a URL string, not a message — a stub that
+    // hands back a message object would let a broken link through a test
+    if (method === 'createInvoiceLink') return { ok: true, result: 'https://t.me/$testinvoice' };
     return { ok: true, result: { message_id: 1, date: 0, chat: { id: fromId, type: 'private' } } };
   });
   bot.botInfo = { id: 111, is_bot: true, first_name: 'T', username: 'testbot', can_join_groups: true,
@@ -1992,6 +1995,222 @@ await (async () => {
   });
 
   store.setPlan.run('locked', null, TRIAL);
+
+  /* ------------------ star subscriptions, end to end -------------------- */
+
+  const SUB = 7700;
+  store.upsertUser(SUB, 'subscriber', 'en');
+  const starsWere = { ...cfg.config.payments.stars };
+  cfg.config.payments.stars.pro = 500;
+  cfg.config.payments.stars.free = 77;
+
+  const payUpdate = (uid, payload, extra) => ({
+    update_id: Math.floor(Math.random() * 1e6),
+    message: {
+      message_id: Math.floor(Math.random() * 1e6),
+      date: Math.floor(Date.now() / 1000),
+      chat: { id: uid, type: 'private' },
+      from: from(uid, 'subscriber'),
+      successful_payment: {
+        currency: 'XTR', total_amount: 500, invoice_payload: payload,
+        telegram_payment_charge_id: 'sub-1', provider_payment_charge_id: 'p-1',
+        ...extra,
+      },
+    },
+  });
+  const subUpdate = (uid, payload, state) => ({
+    update_id: Math.floor(Math.random() * 1e6),
+    subscription: { user: from(uid, 'subscriber'), invoice_payload: payload, state },
+  });
+
+  const offered = await drive(pressUpdate('buy:pro', SUB), SUB);
+  test('a monthly tier is sold as a subscription, not a one-off invoice', () => {
+    const link = offered.find((c) => c.method === 'createInvoiceLink');
+    assert.ok(link, 'createInvoiceLink is the only method that can carry a period');
+    assert.equal(link.payload.subscription_period, 2592000, 'Telegram accepts exactly 30 days');
+    assert.equal(link.payload.currency, 'XTR');
+    assert.equal(link.payload.payload, 'plan:pro', 'the payload is what the renewal comes back with');
+    assert.ok(!offered.some((c) => c.method === 'sendInvoice'), 'sendInvoice cannot do subscriptions');
+    const button = offered
+      .find((c) => c.method === 'sendMessage')
+      .payload.reply_markup.inline_keyboard.flat()
+      .find((b) => b.url);
+    assert.ok(button, 'the link has to reach the user as something tappable');
+  });
+
+  const scoutOffer = await drive(pressUpdate('buy:free', SUB), SUB);
+  test('Scout stays a single purchase — a week is not a subscription period', () => {
+    assert.ok(scoutOffer.some((c) => c.method === 'sendInvoice'));
+    assert.ok(!scoutOffer.some((c) => c.method === 'createInvoiceLink'));
+  });
+
+  const firstDue = store.now() + 30 * 86400;
+  const firstPay = await drive(
+    payUpdate(SUB, 'plan:pro', {
+      is_recurring: true, is_first_recurring: true, subscription_expiration_date: firstDue,
+    }),
+    SUB,
+  );
+
+  test('the first charge stores what Telegram says, not a date of our own', () => {
+    const u = store.getUser(SUB);
+    assert.equal(u.plan, 'pro');
+    assert.equal(u.plan_until, firstDue, "the API's expiry date is the authority on the next charge");
+    assert.equal(u.sub_charge_id, 'sub-1', 'without the charge id nothing can ever be cancelled');
+    assert.equal(u.sub_state, 'active');
+    assert.ok(
+      firstPay.some((c) => c.method === 'sendMessage' && /renews automatically/i.test(c.payload.text)),
+      'the first one says it will recur',
+    );
+  });
+
+  const secondDue = firstDue + 30 * 86400;
+  const renewal = await drive(
+    payUpdate(SUB, 'plan:pro', { is_recurring: true, subscription_expiration_date: secondDue }),
+    SUB,
+  );
+
+  test('a renewal extends the plan and says nothing', () => {
+    assert.equal(store.getUser(SUB).plan_until, secondDue);
+    assert.ok(
+      !renewal.some((c) => c.method === 'sendMessage'),
+      'Telegram already shows the charge; a monthly message from the bot is noise',
+    );
+  });
+
+  await drive(
+    payUpdate(SUB, 'plan:pro', { is_recurring: true, subscription_expiration_date: store.now() + 60 }),
+    SUB,
+  );
+  test('and a late event carrying an older date cannot shorten what was paid', () => {
+    assert.equal(store.getUser(SUB).plan_until, secondDue);
+  });
+
+  // switching tiers: Telegram would keep charging the old subscription too
+  const switched = await drive(
+    payUpdate(SUB, 'plan:turbo', {
+      is_recurring: true,
+      is_first_recurring: true,
+      subscription_expiration_date: secondDue,
+      telegram_payment_charge_id: 'sub-2',
+    }),
+    SUB,
+  );
+  test('changing tier cancels the subscription being replaced', () => {
+    const killed = switched.find(
+      (c) => c.method === 'editUserStarSubscription' && c.payload.telegram_payment_charge_id === 'sub-1',
+    );
+    assert.ok(killed, 'without this the old subscription keeps charging alongside the new one');
+    assert.equal(killed.payload.is_canceled, true);
+    const u = store.getUser(SUB);
+    assert.equal(u.sub_charge_id, 'sub-2', 'and the new one is what /plan can cancel');
+    assert.equal(u.plan, 'turbo');
+  });
+
+  // back to Ranger for the rest of the run, on the charge id the tests expect
+  store.applySubscriptionPayment.run('pro', secondDue, 'sub-1', SUB);
+
+  const cancelled = await drive(pressUpdate('sub:cancel', SUB), SUB);
+  test('cancelling stops the next charge and takes nothing away', () => {
+    const call = cancelled.find((c) => c.method === 'editUserStarSubscription');
+    assert.ok(call, 'this is the Bot API method behind a Stars cancellation');
+    assert.equal(call.payload.is_canceled, true);
+    assert.equal(call.payload.telegram_payment_charge_id, 'sub-1');
+    assert.equal(call.payload.user_id, SUB);
+    const u = store.getUser(SUB);
+    assert.equal(u.sub_state, 'canceled');
+    assert.equal(u.plan_until, secondDue, 'the period already paid for is untouched');
+  });
+
+  test('and the screen says so in as many words', () => {
+    const text = cancelled.find((c) => c.method === 'editMessageText').payload.text;
+    assert.match(text, /Cancelled — access until/, `expected the cancelled state in:\n${text}`);
+    assert.ok(!/Renews automatically/.test(text), 'it no longer renews');
+    const buttons = cancelled
+      .find((c) => c.method === 'editMessageText')
+      .payload.reply_markup.inline_keyboard.flat();
+    assert.ok(buttons.some((b) => b.callback_data === 'sub:resume'), 'and it can be switched back on');
+  });
+
+  const resumed = await drive(pressUpdate('sub:resume', SUB), SUB);
+  test('resuming turns the same switch the other way', () => {
+    const call = resumed.find((c) => c.method === 'editUserStarSubscription');
+    assert.equal(call.payload.is_canceled, false);
+    assert.equal(store.getUser(SUB).sub_state, 'active');
+    assert.match(
+      resumed.find((c) => c.method === 'editMessageText').payload.text,
+      /Renews automatically/,
+    );
+  });
+
+  // a renewal that could not be charged: the plan is nearly out of road
+  store.setPlan.run('pro', store.now() + 30, SUB);
+  const failed = await drive(subUpdate(SUB, 'plan:pro', 'failed'), SUB);
+  test('a failed renewal buys the grace window instead of dropping them at once', () => {
+    const u = store.getUser(SUB);
+    assert.equal(u.sub_state, 'failed');
+    const grace = cfg.config.payments.subscriptions.graceHours * 3600;
+    assert.ok(
+      Math.abs(u.plan_until - (store.now() + grace)) < 10,
+      `expected about ${grace}s of grace, got ${u.plan_until - store.now()}s`,
+    );
+    assert.equal(store.effectivePlan(u), 'pro', 'and the plan still works while they top up');
+    assert.ok(
+      failed.some((c) => c.method === 'sendMessage' && /Star balance/i.test(c.payload.text)),
+      'they have to be told, or the silence is the only warning',
+    );
+  });
+
+  const cancelEvent = await drive(subUpdate(SUB, 'plan:pro', 'canceled'), SUB);
+  test('a cancellation made outside the bot arrives as an update too', () => {
+    assert.equal(store.getUser(SUB).sub_state, 'canceled');
+    assert.ok(cancelEvent.some((c) => c.method === 'sendMessage'), 'and is acknowledged');
+  });
+
+  await drive(subUpdate(SUB, 'plan:pro', 'active'), SUB);
+  test('re-enabling it elsewhere comes back as active', () => {
+    assert.equal(store.getUser(SUB).sub_state, 'active');
+  });
+
+  const usersBeforeStray = store.stats().users;
+  const stray = await drive(subUpdate(999777, 'plan:pro', 'canceled'), 999777);
+  test('a subscription update for somebody we never saw is ignored, not acted on', () => {
+    assert.equal(store.stats().users, usersBeforeStray, 'an unknown user must not be created');
+    assert.ok(!stray.some((c) => c.method === 'sendMessage'), 'and nothing is sent to them');
+  });
+
+  // the migration path: a plan bought before subscriptions existed
+  const LEGACY = 7701;
+  store.upsertUser(LEGACY, 'bogdan', 'en');
+  store.setPlan.run('pro', store.now() + 12 * 86400, LEGACY);
+  const legacyScreen = await drive(pressUpdate('m:plan', LEGACY), LEGACY);
+
+  test('a plan from before subscriptions keeps running, untouched and un-renewing', () => {
+    const u = store.getUser(LEGACY);
+    assert.equal(u.sub_charge_id, null, 'nothing was migrated into a subscription behind their back');
+    assert.equal(store.effectivePlan(u), 'pro', 'and they keep every day they paid for');
+    const screen = legacyScreen.find((c) => c.method === 'editMessageText');
+    assert.match(screen.payload.text, /Valid until/, 'the screen says it simply ends');
+    assert.ok(!/Renews automatically/.test(screen.payload.text));
+    const buttons = screen.payload.reply_markup.inline_keyboard.flat();
+    assert.ok(!buttons.some((b) => (b.callback_data ?? '').startsWith('sub:')), 'nothing to cancel');
+    assert.ok(
+      buttons.some((b) => b.callback_data === 'buy:pro'),
+      'and subscribing is offered for when it runs out',
+    );
+  });
+
+  test('lapsing clears the subscription with the plan', () => {
+    store.setPlan.run('pro', store.now() - 1, SUB);
+    const lapsed = store.getUser(SUB);
+    assert.equal(lapsed.plan, 'locked');
+    assert.equal(lapsed.sub_charge_id, null, 'a dead subscription must not be cancellable');
+    assert.equal(lapsed.sub_state, null);
+  });
+
+  Object.assign(cfg.config.payments.stars, starsWere);
+  store.setPlan.run('locked', null, SUB);
+  store.setPlan.run('locked', null, LEGACY);
 
   const rejected = await runCommand('/grant 4242 platinum 30', 1);
   test('/grant refuses a plan that does not exist', () => {

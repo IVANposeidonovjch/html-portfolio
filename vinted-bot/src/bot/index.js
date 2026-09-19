@@ -1,7 +1,7 @@
 import { Bot, GrammyError, InlineKeyboard } from 'grammy';
 import {
   PLANS, PUBLIC_PLANS, SEAT_ENV_VAR, SELLABLE_PLANS, burstFor, config, intervalFor, isLocked,
-  planDurationSec, searchLimitFor, starsFor, trialWindow, usdFor,
+  isSubscriptionPlan, planDurationSec, searchLimitFor, starsFor, trialWindow, usdFor,
 } from '../config.js';
 import * as store from '../db/index.js';
 import { admits, seatAvailableFor, seats, stagger } from '../monitor/capacity.js';
@@ -144,6 +144,22 @@ function scarcityLine(lang) {
  */
 const linkLimit = (user, plan) =>
   searchLimitFor(plan) + (isLocked(plan) ? 0 : user.extra_links || 0);
+
+/**
+ * What the account's paid time actually is, in the four shapes it can take.
+ * The difference between "renews on the 20th" and "ends on the 20th" is the
+ * whole point of a subscription, so the line says which one it is rather than
+ * printing a bare date and leaving the reader to guess.
+ */
+function subscriptionLine(lang, user, plan) {
+  const date = new Date(user.plan_until * 1000).toISOString().slice(0, 10);
+  if (plan === 'free') return t(lang, 'plan.trialLeft', { left: leftToRun(lang, user.plan_until - store.now()) });
+  if (user.sub_state === 'active') return t(lang, 'plan.renewsOn', { date });
+  if (user.sub_state === 'canceled') return t(lang, 'plan.cancelledUntil', { date });
+  if (user.sub_state === 'failed') return t(lang, 'plan.renewFailed', { date });
+  // bought before subscriptions existed: it runs out and nothing recharges it
+  return t(lang, 'plan.until', { date });
+}
 
 /**
  * What is left of a trial, in the abbreviations every language shares, at the
@@ -834,12 +850,7 @@ export function createBot() {
       lines.push(t(lang, 'plan.addon', { count: user.extra_links }));
     }
     if (user.plan_until && !isLocked(plan)) {
-      // an hours-long trial is counted down; a month-long plan gets a date
-      lines.push(
-        plan === 'free'
-          ? t(lang, 'plan.trialLeft', { left: leftToRun(lang, user.plan_until - store.now()) })
-          : t(lang, 'plan.until', { date: new Date(user.plan_until * 1000).toISOString().slice(0, 10) }),
-      );
+      lines.push(subscriptionLine(lang, user, plan));
     }
 
     // The comparison lists what is for sale. The reserved tier is not in
@@ -862,8 +873,17 @@ export function createBot() {
     lines.push('', scarcityLine(lang));
 
     const kb = new InlineKeyboard();
+    // A live subscription gets its switch first: it is what this screen is for
+    // once somebody is already paying.
+    if (user.sub_charge_id && user.sub_state === 'active') {
+      kb.text(t(lang, 'btn.subCancel'), 'sub:cancel').row();
+    } else if (user.sub_charge_id && user.sub_state === 'canceled' && user.plan_until > store.now()) {
+      kb.text(t(lang, 'btn.subResume'), 'sub:resume').row();
+    }
     for (const tier of SELLABLE_PLANS) {
       if (!starsFor(tier)) continue;
+      // no second subscription to the tier already running
+      if (tier === plan && user.sub_state === 'active') continue;
       // a tier with no spots left says so on the button rather than opening an
       // invoice that would be declined a tap later
       const label = seatAvailableFor(tier, user.tg_id)
@@ -913,20 +933,55 @@ export function createBot() {
     if (!seatAvailableFor(what, user.tg_id)) {
       return ctx.reply(t(lang, 'plan.full', { plan: planName(lang, what) }));
     }
-    await ctx.api.sendInvoice(
-      ctx.chat.id,
-      `Vinted Monitor ${planName(lang, what)}`,
-      what === 'free'
-        ? t(lang, 'plan.invoiceDescTrial', {
-            period: trialPeriod(lang),
-            seconds: intervalFor(what),
-            limit: searchLimitFor(what),
-          })
-        : t(lang, 'plan.invoiceDesc', {
-            days: config.payments.planDays,
+
+    // Scout is a one-off: seven days, bought once, gone when it runs out. The
+    // monthly tiers are real subscriptions, and those cannot be sent with
+    // sendInvoice at all — subscription_period only exists on createInvoiceLink,
+    // so the invoice travels as a link behind a button.
+    if (isSubscriptionPlan(what)) {
+      try {
+        const link = await ctx.api.createInvoiceLink(
+          `Vinted Monitor ${planName(lang, what)}`,
+          t(lang, 'plan.invoiceDescSub', {
             seconds: intervalFor(what),
             limit: searchLimitFor(what),
           }),
+          `plan:${what}`,
+          '',
+          'XTR',
+          [{ label: planName(lang, what), amount: starsFor(what) }],
+          { subscription_period: config.payments.subscriptions.periodSec },
+        );
+        return ctx.reply(
+          t(lang, 'plan.subOffer', {
+            plan: planName(lang, what),
+            stars: starsFor(what),
+            days: config.payments.subscriptions.periodSec / 86400,
+          }),
+          {
+            parse_mode: 'HTML',
+            reply_markup: new InlineKeyboard()
+              .url(t(lang, 'btn.subscribe', { plan: planName(lang, what), stars: starsFor(what) }), link)
+              .row()
+              .text(t(lang, 'kb.menu'), 'm:home'),
+          },
+        );
+      } catch (err) {
+        // a price above what Telegram allows for a subscription, or an older
+        // Bot API: say so rather than leaving a dead button
+        logger.error(`subscription link failed for ${what}: ${err.description || err.message}`);
+        return ctx.reply(t(lang, 'plan.subUnavailable'));
+      }
+    }
+
+    await ctx.api.sendInvoice(
+      ctx.chat.id,
+      `Vinted Monitor ${planName(lang, what)}`,
+      t(lang, 'plan.invoiceDescTrial', {
+        period: trialPeriod(lang),
+        seconds: intervalFor(what),
+        limit: searchLimitFor(what),
+      }),
       `plan:${what}`,
       'XTR',
       [{ label: planName(lang, what), amount: starsFor(what) }],
@@ -978,8 +1033,59 @@ export function createBot() {
       return ctx.reply(t(lang, 'plan.refunded', { plan: planName(lang, what) }));
     }
 
-    const base = Math.max(store.now(), user.plan_until || 0);
+    const payment = ctx.msg.successful_payment;
     const upgrade = store.effectivePlan(user) !== what;
+
+    /**
+     * A subscription charge: the first one and every renewal arrive here the
+     * same way, told apart by is_first_recurring. Telegram's own expiry date
+     * is the authority on when the next charge is due, so it is stored rather
+     * than a date of our own invention — and a renewal is deliberately silent,
+     * because Telegram already shows the payment and a monthly "you were
+     * charged" from the bot on top of it is noise.
+     */
+    if (payment.is_recurring && payment.subscription_expiration_date) {
+      /**
+       * Switching tiers means a second subscription, and Telegram will happily
+       * charge for both — nothing stops a Ranger subscriber starting a Hunter
+       * one. The old charge is cancelled here, after the new one has landed,
+       * so a failure in between leaves somebody paying twice rather than not
+       * at all. Their own cancellation arrives as an update and is a no-op:
+       * the charge id has already moved on.
+       */
+      const previous = user.sub_charge_id;
+      if (previous && previous !== payment.telegram_payment_charge_id) {
+        try {
+          await ctx.api.editUserStarSubscription(user.tg_id, previous, true);
+          logger.info(`switched subscription for ${user.tg_id}: cancelled ${previous}`);
+        } catch (err) {
+          // worth shouting about: this is the path where somebody pays twice
+          logger.error(
+            `could not cancel the previous subscription ${previous} for ${user.tg_id}: ` +
+              `${err.description || err.message}`,
+          );
+        }
+      }
+
+      store.applySubscriptionPayment.run(
+        what,
+        payment.subscription_expiration_date,
+        payment.telegram_payment_charge_id,
+        user.tg_id,
+      );
+      const renews = new Date(payment.subscription_expiration_date * 1000).toISOString().slice(0, 10);
+      if (!payment.is_first_recurring) {
+        logger.info(`subscription renewed: ${user.tg_id} ${what} until ${renews}`);
+        return;
+      }
+      await ctx.reply(t(lang, 'pay.okSub', { plan: planName(lang, what), date: renews }), {
+        parse_mode: 'HTML',
+      });
+      if (upgrade) await announceTier(user.tg_id, what);
+      return;
+    }
+
+    const base = Math.max(store.now(), user.plan_until || 0);
     store.setPlan.run(what, base + planDurationSec(what), user.tg_id);
     await ctx.reply(
       what === 'free'
@@ -988,6 +1094,87 @@ export function createBot() {
     );
     // an extension of the same plan is not a new tier to celebrate
     if (upgrade) await announceTier(user.tg_id, what);
+  });
+
+  /**
+   * The subscription lifecycle, as Telegram reports it. This is the whole
+   * reason recurring billing is worth having: renewals happen without anybody
+   * coming back to the bot, and the two ways they stop arrive as updates
+   * instead of as a user wondering why their searches went quiet.
+   *
+   *   canceled — switched off, by the user or by us. Nothing is taken away:
+   *              the period was paid to its date and runs to it, then the
+   *              ordinary floor picks it up.
+   *   failed   — the renewal could not be charged, almost always an empty Star
+   *              balance. That is somebody who meant to pay, so the plan is
+   *              held open for the grace window while they top up.
+   *   active   — a cancelled subscription was switched back on.
+   */
+  bot.on('subscription', async (ctx) => {
+    const { user, invoice_payload: payload, state } = ctx.subscription;
+    const [kind, what] = String(payload).split(':');
+    const known = store.getUser(user.id);
+    if (kind !== 'plan' || !known) {
+      logger.warn(`subscription update for an unknown payload=${payload} user=${user.id}`);
+      return;
+    }
+    const lang = known.lang || 'en';
+    const until = (seconds) => new Date(seconds * 1000).toISOString().slice(0, 10);
+    logger.info(`subscription ${state}: ${user.id} ${what}`);
+
+    if (state === 'canceled') {
+      store.setSubState.run('canceled', user.id);
+      const fresh = store.getUser(user.id);
+      await ctx.api
+        .sendMessage(user.id, t(lang, 'sub.cancelled', { date: until(fresh.plan_until || store.now()) }), {
+          parse_mode: 'HTML',
+        })
+        .catch(() => {});
+      return;
+    }
+
+    if (state === 'failed') {
+      const grace = store.now() + config.payments.subscriptions.graceHours * 3600;
+      store.graceSubscription.run(grace, user.id);
+      const fresh = store.getUser(user.id);
+      await ctx.api
+        .sendMessage(
+          user.id,
+          t(lang, 'sub.failed', {
+            plan: planName(lang, what),
+            stars: starsFor(what),
+            date: until(fresh.plan_until || grace),
+          }),
+          { parse_mode: 'HTML' },
+        )
+        .catch(() => {});
+      return;
+    }
+
+    store.setSubState.run('active', user.id);
+    await ctx.api.sendMessage(user.id, t(lang, 'sub.resumed'), { parse_mode: 'HTML' }).catch(() => {});
+  });
+
+  /**
+   * Cancelling stops the next charge and nothing else — the period already paid
+   * for runs to its date. Reversible while it lasts, which is why this is one
+   * tap rather than a confirmation screen.
+   */
+  bot.callbackQuery(/^sub:(cancel|resume)$/, async (ctx) => {
+    const { user, lang } = who(ctx);
+    const wantsCancel = ctx.match[1] === 'cancel';
+    if (!user.sub_charge_id) return ctx.answerCallbackQuery(t(lang, 'sub.none'));
+    try {
+      await ctx.api.editUserStarSubscription(user.tg_id, user.sub_charge_id, wantsCancel);
+    } catch (err) {
+      logger.error(`could not ${ctx.match[1]} subscription for ${user.tg_id}: ${err.description || err.message}`);
+      return ctx.answerCallbackQuery({ text: t(lang, 'sub.changeFailed'), show_alert: true });
+    }
+    // Telegram also sends a subscription update for this, but the screen the
+    // user is looking at has to be right now, not a round trip later
+    store.setSubState.run(wantsCancel ? 'canceled' : 'active', user.tg_id);
+    await ctx.answerCallbackQuery(t(lang, wantsCancel ? 'sub.cancelledShort' : 'sub.resumedShort'));
+    await showPlan(ctx);
   });
 
   /* -------------------------------- admin -------------------------------- */
