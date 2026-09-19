@@ -91,9 +91,25 @@ export const langKb = (current) => {
  * front menu — what someone is paying for is not a setting.
  */
 export const helpKb = (lang, { support = false } = {}) => {
-  const kb = new InlineKeyboard()
-    .text(t(lang, 'btn.lang'), 'm:lang').text(t(lang, 'btn.chats'), 'm:chats').row();
-  if (support) kb.text(t(lang, 'btn.support'), 'm:support').row();
+  const kb = new InlineKeyboard();
+  // Support sits above the settings, not under them: somebody opening help
+  // because something is wrong should not have to read past two preferences
+  // to find the way to a person.
+  if (support) kb.text(t(lang, 'btn.support'), 'm:sos').row();
+  kb.text(t(lang, 'btn.lang'), 'm:lang').text(t(lang, 'btn.chats'), 'm:chats').row();
+  return backRow(kb, lang);
+};
+
+/**
+ * The support screen's own buttons. The handle is a plain link — one tap and
+ * Telegram opens the chat, with nothing of ours in the way. The relay below it
+ * only appears when somebody is actually staffing it, because a button that
+ * takes a message nobody reads is worse than no button.
+ */
+export const sosKb = (lang, { url = '', handle = '', relay = false } = {}) => {
+  const kb = new InlineKeyboard();
+  if (url) kb.url(t(lang, 'btn.contact', { handle }), url).row();
+  if (relay) kb.text(t(lang, 'btn.supportRelay'), 'm:support').row();
   return backRow(kb, lang);
 };
 

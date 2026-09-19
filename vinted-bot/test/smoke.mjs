@@ -788,7 +788,7 @@ test('a group upgraded to a supergroup takes its searches with it', () => {
 
 /* ---------------------------- inline menu ------------------------------- */
 
-const { mainMenu, menuOnlyKb, helpKb } = await import('../src/bot/keyboards.js');
+const { mainMenu, menuOnlyKb, helpKb, sosKb } = await import('../src/bot/keyboards.js');
 
 test('the menu is an inline keyboard, not a keyboard pinned to the chat', () => {
   const kb = mainMenu('ru', { monitoring: true });
@@ -815,6 +815,71 @@ test('what someone pays for is on the front menu, not behind Help', () => {
   const help = helpKb('ru').inline_keyboard.flat().map((b) => b.callback_data);
   assert.deepEqual(help, ['m:lang', 'm:chats', 'm:home'], 'and they must be reachable there');
   assert.ok(!help.includes('m:plan'), 'Plan graduated, it must not be in two places');
+});
+
+/* ------------------------------- support --------------------------------- */
+
+test('help leads with the way to a person, above the two settings', () => {
+  const rows = helpKb('en', { support: true }).inline_keyboard;
+  assert.deepEqual(
+    rows.map((r) => r.map((b) => b.callback_data)),
+    [['m:sos'], ['m:lang', 'm:chats'], ['m:home']],
+    'somebody in trouble should not have to read past two preferences',
+  );
+  assert.equal(rows[0][0].text, LOCALES.en['btn.support']);
+  // with nothing staffed at all the row is not a dead end, it is absent
+  const bare = helpKb('en').inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(!bare.includes('m:sos'), 'no handle and no relay means no button');
+});
+
+test('the support screen opens the chat directly and names the handle', () => {
+  const kb = sosKb('en', { url: 'https://t.me/tyzanema', handle: '@tyzanema' });
+  const open = kb.inline_keyboard[0][0];
+  assert.equal(open.url, 'https://t.me/tyzanema', 'a link, not a callback: one tap, no round trip');
+  assert.equal(open.callback_data, undefined);
+  assert.match(open.text, /@tyzanema/, 'the button says who it opens');
+  const actions = kb.inline_keyboard.flat().map((b) => b.callback_data ?? b.url);
+  assert.ok(!actions.includes('m:support'), 'the relay only shows when somebody staffs it');
+  const staffed = sosKb('en', { url: 'https://t.me/x', handle: '@x', relay: true });
+  assert.ok(staffed.inline_keyboard.flat().some((b) => b.callback_data === 'm:support'));
+});
+
+test('a handle needs no process behind it, so it survives the relay being off', () => {
+  const original = cfg.config.supportUser;
+  const originalId = cfg.config.supportId;
+  try {
+    cfg.config.supportUser = 'tyzanema';
+    cfg.config.supportId = 0;
+    assert.equal(cfg.supportUrl(), 'https://t.me/tyzanema');
+    assert.equal(cfg.supportHandle(), '@tyzanema');
+    assert.ok(cfg.hasSupport(), 'a public handle alone is a working support channel');
+    cfg.config.supportUser = '';
+    assert.equal(cfg.supportUrl(), '', 'no handle, no link button');
+    assert.ok(!cfg.hasSupport(), 'and with the relay off too there is nothing to offer');
+    cfg.config.supportId = 42;
+    assert.ok(cfg.hasSupport(), 'the relay on its own is still support');
+  } finally {
+    cfg.config.supportUser = original;
+    cfg.config.supportId = originalId;
+  }
+});
+
+test('the support copy sells the ask instead of gatekeeping it', () => {
+  for (const [code, dict] of Object.entries(LOCALES)) {
+    const text = t(code, 'support.sos', { handle: '@tyzanema' });
+    assert.ok(!/\{\w+\}/.test(text), `${code}: an unfilled placeholder on the support screen`);
+    assert.match(text, /@tyzanema/, `${code}: the handle has to be copyable as text, not only a button`);
+    // three reasons to write, each its own bullet: more links, breakage, ideas
+    assert.equal((text.match(/^•/gm) || []).length, 3, `${code}: the three reasons to write`);
+    assert.ok(dict['btn.contact'].includes('{handle}'), `${code}: the button must name who it opens`);
+    for (const tag of new Set([...text.matchAll(/<\/?([a-z]+)/g)].map((m) => m[1]))) {
+      assert.ok(['b', 'i', 'u', 's', 'code', 'a'].includes(tag), `${code}: <${tag}> not allowed`);
+    }
+  }
+  // the plain-text line it replaces is gone: the button is the one way in
+  for (const [code, dict] of Object.entries(LOCALES)) {
+    assert.ok(!dict['help.text'].includes('@'), `${code}: help still carries a handle in prose`);
+  }
 });
 
 test('the toggle button shows the current state', () => {
@@ -1873,6 +1938,21 @@ await (async () => {
     assert.match(edit.payload.text, /unavailable|недоступна/i);
   });
   cfg.config.supportId = SUPPORT;
+
+  const sosScreen = await drive(pressUpdate('m:sos', USER), USER);
+  test('the 🆘 button lands on a screen with a live link to a person', () => {
+    const edit = sosScreen.find((c) => c.method === 'editMessageText');
+    assert.ok(edit, 'the support screen has to render');
+    assert.match(edit.payload.text, /@tyzanema/, 'the handle is in the text, copyable');
+    const buttons = edit.payload.reply_markup.inline_keyboard.flat();
+    const open = buttons.find((b) => b.url);
+    assert.equal(open.url, 'https://t.me/tyzanema', 'and one tap opens the chat');
+    assert.ok(
+      buttons.some((b) => b.callback_data === 'm:support'),
+      'with the relay staffed, writing from inside the bot is offered too',
+    );
+    assert.ok(buttons.some((b) => b.callback_data === 'm:home'), 'and a way back');
+  });
 
   /* ------------------------- reaching a tier --------------------------- */
 

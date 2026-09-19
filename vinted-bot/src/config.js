@@ -201,8 +201,12 @@ export const config = {
     },
   },
 
-  // Someone who answers /support. 0 disables the button entirely.
+  // Someone who answers /support from inside the bot: the relay. 0 turns that
+  // half off. The public handle below is the other half and needs nothing
+  // running — a tap opens the chat in Telegram itself. Either one on its own
+  // is enough to put the 🆘 button on the help screen.
   supportId: num(process.env.SUPPORT_TG_ID, 0),
+  supportUser: (process.env.SUPPORT_USERNAME ?? 'tyzanema').replace(/^@/, '').trim(),
 
   // The near-miss note: how old a listing has to be on arrival before a
   // slower plan is told what it cost them, and how rarely to mention it.
@@ -330,3 +334,13 @@ export const overSubscriptionCap = () =>
 export function ratePerMinuteFor(plan) {
   return config.delivery.perMinute[plan] ?? 0;
 }
+
+/**
+ * Where the 🆘 button sends somebody. A handle needs no process running behind
+ * it, which is the point: even with the relay off, or the bot itself wedged,
+ * the way to reach a person is still one tap.
+ */
+export const supportHandle = () => (config.supportUser ? `@${config.supportUser}` : '');
+export const supportUrl = () => (config.supportUser ? `https://t.me/${config.supportUser}` : '');
+/** Either half is enough to be worth showing the button. */
+export const hasSupport = () => !!config.supportUser || !!config.supportId;

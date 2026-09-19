@@ -29,9 +29,7 @@ export const en = {
 3. Turn on Topics in the group settings, then send <code>/bind</code> there.
 4. Done — every link you add now opens its own topic: Raf, Helmut, Bags, all in one place.
 
-⌨️ <b>Commands</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Everything else is a button.
-
-✉️ <b>More links than your plan allows, a problem or an idea</b> — write to @tyzanema.`,
+⌨️ <b>Commands</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Everything else is a button.`,
 
   // the example section: a mockup when there is no picture, a pointer when there is
   'help.example': `🔔 <b>What an alert looks like</b>
@@ -243,6 +241,17 @@ Example:
   'btn.addon': '➕{links} links · {stars} ⭐',
   'addon.bought': '✅ +{links} links. You now have {total}.',
   'addon.needPlan': 'Extra links come on top of a paid plan — pick one below.',
+  'btn.contact': '✍️ Write to {handle}',
+  'btn.supportRelay': '💬 Send from here',
+  'support.sos': `🆘 <b>Support</b>
+
+There is a person behind {handle}, not a form — write any time and you will get a real answer.
+
+• <b>More links than your plan allows</b> — just ask. The limits are a default, not a wall.
+• <b>Something is broken</b> — tell me what you saw. Bugs jump the queue.
+• <b>An idea</b> — most of what this bot does started as somebody's message.
+
+Write in your own language, it is read either way.`,
   'btn.support': '🆘 Support',
   'support.ask': '🆘 Write your message in one go — I will pass it to support and bring the answer back here.',
   'support.sent': '✅ Sent. The answer will arrive in this chat.',

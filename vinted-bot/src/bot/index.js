@@ -1,7 +1,8 @@
 import { Bot, GrammyError, InlineKeyboard } from 'grammy';
 import {
-  PLANS, PUBLIC_PLANS, SEAT_ENV_VAR, SELLABLE_PLANS, STARTER_PLAN, burstFor, config, intervalFor,
-  isLocked, isSubscriptionPlan, planDurationSec, searchLimitFor, starsFor, trialWindow, usdFor,
+  PLANS, PUBLIC_PLANS, SEAT_ENV_VAR, SELLABLE_PLANS, STARTER_PLAN, burstFor, config, hasSupport,
+  intervalFor, isLocked, isSubscriptionPlan, planDurationSec, searchLimitFor, starsFor,
+  supportHandle, supportUrl, trialWindow, usdFor,
 } from '../config.js';
 import * as store from '../db/index.js';
 import { admits, seatAvailableFor, seats, stagger } from '../monitor/capacity.js';
@@ -13,6 +14,7 @@ import { helpParts, helpText } from './help.js';
 import { adoptPhoto, forgetImage, imageFor } from './images.js';
 import {
   backRow, cancelKb, chatsKb, confirmDeleteKb, destinationKb, helpKb, langKb, mainMenu, menuOnlyKb,
+  sosKb,
   planKb, searchKb, searchListKb, topicKb,
 } from './keyboards.js';
 
@@ -331,7 +333,10 @@ export function createBot() {
     });
   }
 
-  const supportOpt = { support: !!config.supportId };
+  // Either half of support — the public handle or the in-bot relay — earns the
+  // 🆘 button. It is the one thing on the help screen somebody may be looking
+  // for in a hurry.
+  const supportOpt = { support: hasSupport() };
 
   /** Help doubles as the second level: plan, language and chats live here. */
   async function showHelp(ctx) {
@@ -377,6 +382,30 @@ export function createBot() {
   bot.callbackQuery('m:help', async (ctx) => {
     await ctx.answerCallbackQuery();
     await showHelp(ctx);
+  });
+
+  /**
+   * The support screen. It exists to say, in plain words, that asking is
+   * normal — most people never think to ask for more links than the plan
+   * advertises, and that request is the start of the best conversations we
+   * have. The handle underneath is a link, so reaching a person costs one tap.
+   */
+  const showSos = async (ctx) => {
+    const { lang } = who(ctx);
+    return render(ctx, t(lang, 'support.sos', { handle: supportHandle() }), {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      reply_markup: sosKb(lang, {
+        url: supportUrl(),
+        handle: supportHandle(),
+        relay: !!config.supportId,
+      }),
+    });
+  };
+
+  bot.callbackQuery('m:sos', async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await showSos(ctx);
   });
 
   const askSupport = async (ctx) => {

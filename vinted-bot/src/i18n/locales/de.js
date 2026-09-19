@@ -29,9 +29,7 @@ export const de = {
 3. In den Gruppeneinstellungen Themen aktivieren und dort <code>/bind</code> schreiben.
 4. Fertig — jeder neue Link legt sein eigenes Thema an: Raf, Helmut, Bags an einem Ort.
 
-⌨️ <b>Befehle</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Alles andere per Button.
-
-✉️ <b>Mehr Links als dein Tarif erlaubt, ein Problem oder eine Idee</b> — schreib an @tyzanema.`,
+⌨️ <b>Befehle</b> — <code>/start</code>, <code>/add</code>, <code>/help</code>. Alles andere per Button.`,
 
   // the example section: a mockup when there is no picture, a pointer when there is
   'help.example': `🔔 <b>So sieht ein Treffer aus</b>
@@ -243,6 +241,17 @@ Beispiel:
   'btn.addon': '➕{links} Links · {stars} ⭐',
   'addon.bought': '✅ +{links} Links. Jetzt verfügbar: {total}.',
   'addon.needPlan': 'Zusatzlinks gibt es zu einem bezahlten Tarif — wähl unten einen aus.',
+  'btn.contact': '✍️ {handle} schreiben',
+  'btn.supportRelay': '💬 Von hier aus senden',
+  'support.sos': `🆘 <b>Support</b>
+
+Hinter {handle} sitzt ein Mensch, kein Formular — schreib jederzeit, du bekommst eine echte Antwort.
+
+• <b>Mehr Links als dein Tarif erlaubt</b> — frag einfach. Das Limit ist eine Voreinstellung, keine Wand.
+• <b>Etwas ist kaputt</b> — sag, was du gesehen hast. Bugs kommen vor allem anderen.
+• <b>Eine Idee</b> — das meiste, was dieser Bot kann, fing als Nachricht von jemandem an.
+
+Schreib in deiner Sprache, gelesen wird sie so oder so.`,
   'btn.support': '🆘 Support',
   'support.ask': '🆘 Schreib deine Nachricht am Stück — ich gebe sie an den Support und bringe die Antwort hierher.',
   'support.sent': '✅ Gesendet. Die Antwort kommt in diesen Chat.',
