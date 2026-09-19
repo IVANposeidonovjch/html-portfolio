@@ -6,6 +6,7 @@ import { jitter, sleep } from '../util/ratelimit.js';
 import { fetchCatalog, VintedError } from '../vinted/client.js';
 import { normalizeAll } from '../vinted/normalize.js';
 import { CapacityAlarm, capacityReport, sweepOverLimit } from './capacity.js';
+import { runReplacement } from '../proxy/autoreplace.js';
 
 const TICK_MS = 1000;
 const BATCH = 40; // searches picked up per tick
@@ -25,6 +26,14 @@ export class Monitor {
     /** Set by the caller to warn a user their links are over the new limit. */
     this.onOverLimit = null;
     this.onLimitEnforced = null;
+    /** Set by the caller to tell the admins a proxy was bought, or cannot be. */
+    this.onProxyReplaced = null;
+    this.onReplacementBudget = null;
+    // both of these are standing conditions rather than events — true again on
+    // every check until the month rolls over or somebody acts — so each is
+    // said once and not repeated every quarter of an hour
+    this.budgetWarned = false;
+    this.reserveWarned = false;
   }
 
   start() {
@@ -34,9 +43,15 @@ export class Monitor {
     // hourly is often enough for a window measured in days, and it means a
     // deadline is never missed by more than an hour
     this.limits = setInterval(() => this.checkLimits(), 3600 * 1000);
+    this.proxies = setInterval(
+      () => this.checkProxies(),
+      config.webshare.checkEverySec * 1000,
+    );
     // a restart into an already overloaded pool should say so now, not in a minute
     this.checkCapacity();
     this.checkLimits();
+    // but the pool is not checked at boot: nothing has had time to die yet,
+    // and deadForSec has to be measured from this process, not the last one
   }
 
   stop() {
@@ -44,6 +59,7 @@ export class Monitor {
     clearInterval(this.prune);
     clearInterval(this.watch);
     clearInterval(this.limits);
+    clearInterval(this.proxies);
   }
 
   /**
@@ -65,6 +81,55 @@ export class Monitor {
       }
     } catch (err) {
       logger.error('over-limit sweep failed:', err);
+    }
+  }
+
+  /**
+   * Buy a replacement for anything that has stayed dead, within the month's
+   * budget, and tell the admins before the budget runs out rather than after.
+   *
+   * Everything here is best-effort by design: a Webshare outage must not stop
+   * the bot polling, so a failure is logged and the pool carries on short a
+   * proxy, exactly as it did before any of this existed.
+   */
+  async checkProxies(run = runReplacement) {
+    let result;
+    try {
+      result = await run();
+    } catch (err) {
+      logger.error('proxy replacement check failed:', err);
+      return;
+    }
+    if (result.status === 'no-token' || result.status === 'off') return;
+
+    for (const done of result.replaced) {
+      logger.warn(`proxy #${done.index} (${done.country}) replaced via Webshare`);
+    }
+    if (result.replaced.length) this.onProxyReplaced?.(result);
+
+    // "dead proxies I am not allowed to replace" holds until the allowance
+    // resets or a human spends one, which is hours or days of checks
+    if (result.status === 'reserve' && !this.reserveWarned) {
+      this.reserveWarned = true;
+      this.onProxyReplaced?.(result);
+    } else if (result.status !== 'reserve') {
+      this.reserveWarned = false;
+    }
+
+    // said once per crossing, and again only after the allowance resets
+    if (result.budget) {
+      if (result.lowBudget && !this.budgetWarned) {
+        this.budgetWarned = true;
+        this.onReplacementBudget?.(result.budget);
+      } else if (!result.lowBudget) {
+        this.budgetWarned = false;
+      }
+    }
+
+    if (result.restartNeeded) {
+      logger.warn('PROXY_REPLACE_RESTART is set and the pool changed — exiting for the supervisor');
+      this.onProxyReplaced?.({ ...result, exiting: true });
+      setTimeout(() => process.exit(0), 2000);
     }
   }
 

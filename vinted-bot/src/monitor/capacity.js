@@ -2,6 +2,7 @@ import { config, intervalFor, isLocked, searchLimitFor, seatCapFor } from '../co
 import * as store from '../db/index.js';
 import { t } from '../i18n/index.js';
 import { proxyHealth } from '../vinted/client.js';
+import { lastBudget } from '../proxy/autoreplace.js';
 
 /**
  * What the proxy pool can carry, and how much of it is already sold.
@@ -123,6 +124,24 @@ export function proxyHealthLine() {
 }
 
 /**
+ * The replacement allowance, as last read from Webshare. Cached rather than
+ * fetched, so /stats never hangs on somebody else's API — and dated, so a
+ * stale number is visibly stale instead of quietly wrong.
+ */
+export function replacementLine(at = Date.now()) {
+  if (!config.webshare.token) return 'Замены прокси: WEBSHARE_TOKEN не задан — автозамена выключена';
+  const budget = lastBudget();
+  if (!budget) return 'Замены прокси: ещё не проверялись';
+  const resets = budget.resetsAt instanceof Date ? budget.resetsAt : new Date(budget.resetsAt);
+  const age = Math.round((at - budget.checkedAt) / 60000);
+  const low = budget.available <= config.webshare.alertThreshold ? ' ⚠️' : '';
+  return (
+    `Замены прокси: ${budget.available} из ${budget.total} осталось${low} · ` +
+    `сброс ${resets.toISOString().slice(0, 10)} · проверено ${age} мин назад`
+  );
+}
+
+/**
  * The capacity section of /stats. Russian like the rest of the admin surface,
  * and living here rather than in the entry point so it can be tested.
  */
@@ -135,6 +154,7 @@ export function statsLines() {
     // by position, not by URL: a proxy string carries its own password
     `Прокси: ${proxySlots().map((s, i) => `${s.proxy === 'direct' ? 'прямой IP' : `#${i + 1}`} ${s.rps} req/s`).join(', ')}`,
     proxyHealthLine(),
+    replacementLine(),
   ];
   const capped = cappedPlans();
   if (capped.length) {

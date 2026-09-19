@@ -1,35 +1,35 @@
 #!/usr/bin/env node
 /**
- * Webshare pool manager — ZERO dependencies, single file. Node >= 18.
+ * Webshare pool manager. Node >= 18, no dependencies beyond the bot's own
+ * modules, so it reads the same config and the same .env the bot does.
  *
- * The dashboard's Replace Proxy button hands you a new IP and leaves you to
- * notice that PROXIES in .env still names the old one. The bot then dials an
- * address that no longer exists: one dead route in N, nothing obviously wrong,
- * everybody a bit late. This does the replacement AND prints the PROXIES line
- * that has to follow it, so the two cannot drift apart.
- *
- *   export WEBSHARE_TOKEN=...        # dashboard -> API -> Keys
- *   node tools/webshare.mjs list                            # pool by country
- *   node tools/webshare.mjs env                             # the PROXIES= line
- *   node tools/webshare.mjs replace --from US --to FR       # DRY RUN by default
- *   node tools/webshare.mjs replace --from US --to FR --go  # actually do it
+ *   node tools/webshare.mjs list              # the pool, by country
+ *   node tools/webshare.mjs budget            # replacements left this month
+ *   node tools/webshare.mjs env               # just the PROXIES= line
+ *   node tools/webshare.mjs replace --from US --to FR          # DRY RUN
+ *   node tools/webshare.mjs replace --from US --to FR --count 5 --go
  *   node tools/webshare.mjs replace --ip 9.142.11.148 --to FR --go
+ *   node tools/webshare.mjs heal              # replace whatever is dead (DRY RUN)
+ *   node tools/webshare.mjs heal --go --max-per-run 2
  *
- * Replacement is a purchase against your plan and cannot be undone from here,
- * so nothing is committed without --go. A dry run asks Webshare what it WOULD
- * do and prints that; run it first, every time.
+ * Nothing spends a replacement without --go. Replacements are a small fixed
+ * monthly allowance that does not carry over, so every command that can spend
+ * one prints the budget first and refuses to touch the reserve
+ * (REPLACEMENT_ALERT_THRESHOLD) unless --force says to.
  *
- * The output carries your proxy passwords, which is the whole point of the
- * PROXIES line — treat it like the .env file it is going into. The API token
- * itself is never printed.
+ * WEBSHARE_TOKEN comes from .env like everything else and is never printed.
+ * The PROXIES line does carry proxy passwords — that is what it is for; treat
+ * the output like the .env file it is going into.
  */
 
-const API = 'https://proxy.webshare.io/api';
-const TOKEN = process.env.WEBSHARE_TOKEN || '';
+import { config } from '../src/config.js';
+import { createWebshare, proxiesLine, rowFor } from '../src/proxy/webshare.js';
+import { writeEnvValue } from '../src/proxy/envfile.js';
+import { mergePool, runReplacement } from '../src/proxy/autoreplace.js';
 
 const argv = process.argv.slice(2);
 const command = argv[0] || 'list';
-const flag = (name, fallback = undefined) => {
+const flag = (name, fallback) => {
   const at = argv.indexOf(`--${name}`);
   if (at < 0) return fallback;
   const next = argv[at + 1];
@@ -42,62 +42,25 @@ const die = (msg) => {
   process.exit(1);
 };
 
-/** Every call goes through here so a bad token is diagnosed once, not per call. */
-async function api(path, { method = 'GET', body } = {}) {
-  const res = await fetch(`${API}${path}`, {
-    method,
-    headers: {
-      Authorization: `Token ${TOKEN}`,
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
-    },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  const text = await res.text();
-  let parsed;
-  try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch {
-    parsed = null;
-  }
-  if (!res.ok) {
-    if (res.status === 401) die('Webshare rejected the token (401). Check WEBSHARE_TOKEN.');
-    // the body is where Webshare says which field it disliked, so show it whole
-    die(`${method} ${path} -> HTTP ${res.status}\n${text.slice(0, 2000)}`);
-  }
-  if (parsed === null) die(`${method} ${path} answered something that is not JSON:\n${text.slice(0, 500)}`);
-  return parsed;
-}
+const api = createWebshare();
 
-/** The full pool, following pagination rather than trusting one page to hold it. */
-async function pool() {
-  const rows = [];
-  for (let page = 1; page <= 20; page++) {
-    const data = await api(`/v2/proxy/list/?mode=direct&page=${page}&page_size=100`);
-    const batch = data.results;
-    if (!Array.isArray(batch)) die(`unexpected list shape:\n${JSON.stringify(data).slice(0, 500)}`);
-    rows.push(...batch);
-    if (!data.next) break;
-  }
-  return rows;
-}
-
-/** Exactly the form src/vinted/client.js expects, in the pool's own order. */
-const proxiesLine = (rows) =>
-  `PROXIES=${rows
-    .map((p) => `http://${p.username}:${p.password}@${p.proxy_address}:${p.port}`)
-    .join(',')}`;
+const showBudget = (b) => {
+  const resets = (b.resetsAt instanceof Date ? b.resetsAt : new Date(b.resetsAt)).toISOString().slice(0, 10);
+  const reserve = config.webshare.alertThreshold;
+  console.log(
+    `\nReplacements: ${b.available} of ${b.total} left` +
+      `${b.available <= reserve ? ' ⚠️  at or under the reserve' : ''}` +
+      ` · used ${b.used} · resets ${resets} · reserve ${reserve}`,
+  );
+  return b;
+};
 
 function summarise(rows) {
   const byCountry = new Map();
-  for (const p of rows) {
-    const code = p.country_code || '??';
-    byCountry.set(code, (byCountry.get(code) || 0) + 1);
-  }
-  const order = [...byCountry.entries()].sort((a, b) => b[1] - a[1]);
+  for (const p of rows) byCountry.set(p.country_code || '??', (byCountry.get(p.country_code || '??') || 0) + 1);
   console.log(`\n${rows.length} proxies\n`);
-  for (const [code, n] of order) {
-    const bar = '█'.repeat(n);
-    console.log(`  ${code.padEnd(4)} ${String(n).padStart(3)}  ${bar}`);
+  for (const [code, n] of [...byCountry.entries()].sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${code.padEnd(4)} ${String(n).padStart(3)}  ${'█'.repeat(n)}`);
   }
   console.log('\n  address              port   country  city              valid');
   for (const p of rows) {
@@ -111,8 +74,7 @@ function summarise(rows) {
 
 /**
  * Webshare takes the target either as a country bucket or as an IP range, so a
- * single /32 is how you name one specific proxy. --count is what turns "swap a
- * US one" into a number rather than the whole bucket.
+ * single /32 is how you name one specific proxy.
  */
 function buildReplacement() {
   const to = String(flag('to', '') || '').toUpperCase();
@@ -122,40 +84,92 @@ function buildReplacement() {
   const from = flag('from');
   const count = Number(flag('count', 1));
   if (!Number.isInteger(count) || count < 1) die('--count must be a positive whole number');
-
-  if (ip && from) die('give either --ip (one specific proxy) or --from (a country bucket), not both');
+  if (ip && from) die('give either --ip (one proxy) or --from (a country bucket), not both');
   if (!ip && !from) die('say what to replace: --ip 1.2.3.4, or --from US');
 
-  const to_replace = ip
-    ? { type: 'ip_range', ip_ranges: [`${ip}/32`] }
-    : { type: 'country', country_code: String(from).toUpperCase(), count };
+  return {
+    toReplace: ip
+      ? { type: 'ip_range', ip_ranges: [`${ip}/32`] }
+      : { type: 'country', country_code: String(from).toUpperCase(), count },
+    replaceWith: [{ type: 'country', country_code: to, count: ip ? 1 : count }],
+    spend: ip ? 1 : count,
+  };
+}
 
-  return { to_replace, replace_with: [{ type: 'country', country_code: to, count: ip ? 1 : count }] };
+/** The pool changed: the .env line has to follow it or the bot dials a ghost. */
+async function syncEnv() {
+  const after = await api.listProxies();
+  const { pool, swaps } = mergePool(config.vinted.proxies, after);
+  if (config.vinted.proxies.length) {
+    const written = writeEnvValue(config.webshare.envPath, 'PROXIES', pool.join(','));
+    console.log(
+      written.changed
+        ? `\n✅ PROXIES updated in ${written.file}\n   backup: ${written.backup}\n   ${swaps.length} slot(s) changed — restart the bot, or let the running one pick it up on its next check`
+        : `\n${config.webshare.envPath} already matched the pool — nothing written`,
+    );
+  } else {
+    console.log('\nPROXIES is empty in .env, so nothing was rewritten. The line you want:\n');
+    console.log(proxiesLine(after));
+  }
+  summarise(after);
 }
 
 async function main() {
-  if (!TOKEN) die('set WEBSHARE_TOKEN first (dashboard -> API -> Keys). It is never printed.');
+  if (!api.hasToken()) die('WEBSHARE_TOKEN is not set (dashboard -> API -> Keys). It is never printed.');
 
   if (command === 'list') {
-    summarise(await pool());
+    summarise(await api.listProxies());
     console.log('\nPROXIES line: node tools/webshare.mjs env\n');
     return;
   }
 
+  if (command === 'budget') {
+    showBudget(await api.budget());
+    console.log('');
+    return;
+  }
+
   if (command === 'env') {
-    // stdout is only the line, so it pipes: `... env >> .env` or | pbcopy
-    console.log(proxiesLine(await pool()));
+    // stdout is only the line, so it pipes
+    console.log(proxiesLine(await api.listProxies()));
+    return;
+  }
+
+  if (command === 'heal') {
+    const go = has('go');
+    const maxPerRun = Number(flag('max-per-run', config.webshare.maxPerRun));
+    if (!Number.isInteger(maxPerRun) || maxPerRun < 1) die('--max-per-run must be a positive whole number');
+
+    // the CLI has no running bot behind it, so nothing here knows which proxies
+    // have been failing — that state lives in the process that does the polling
+    console.log(
+      '\nNote: "dead" is measured by the running bot, not by this script. Run from the\n' +
+        'bot host; if the bot is not running, this will find nothing to heal.\n',
+    );
+    const result = await runReplacement({ api, dryRun: !go, maxPerRun });
+    if (result.budget) showBudget(result.budget);
+    console.log(`\nstatus: ${result.status} · dead: ${result.wanted} · replaced: ${result.replaced.length}`);
+    for (const r of result.replaced) console.log(`  #${r.index} ${r.address} (${r.country})`);
+    if (result.error) console.log(`error: ${result.error}`);
+    console.log(go ? '' : '\nDRY RUN. Nothing was spent. Add --go to commit.\n');
     return;
   }
 
   if (command === 'replace') {
     const plan = buildReplacement();
     const go = has('go');
+    const budget = showBudget(await api.budget());
+    const reserve = config.webshare.alertThreshold;
 
-    const preview = await api('/v3/proxy/replace/', {
-      method: 'POST',
-      body: { ...plan, dry_run: true },
-    });
+    if (go && budget.available - plan.spend < reserve && !has('force')) {
+      die(
+        `that would leave ${budget.available - plan.spend} replacement(s), under the reserve of ` +
+          `${reserve}. Add --force if you mean to spend the reserve.`,
+      );
+    }
+    if (plan.spend > budget.available) die(`only ${budget.available} replacement(s) left this month`);
+
+    const preview = await api.replace({ ...plan, dryRun: true });
     console.log('\n— what Webshare says it would do —');
     console.log(JSON.stringify(preview, null, 2));
 
@@ -164,25 +178,15 @@ async function main() {
       return;
     }
 
-    const done = await api('/v3/proxy/replace/', {
-      method: 'POST',
-      body: { ...plan, dry_run: false },
-    });
-    console.log('\n— done —');
-    console.log(JSON.stringify(done, null, 2));
-
-    // The pool is only half the job: the bot still points at the old address
-    // until this line lands in .env, so print it here rather than trusting
-    // anybody to remember a second command.
-    const rows = await pool();
-    summarise(rows);
-    console.log(`\n▼ replace PROXIES in .env with this line, then restart the bot ▼\n`);
-    console.log(proxiesLine(rows));
+    console.log('\n— doing it —');
+    console.log(JSON.stringify(await api.replace({ ...plan, dryRun: false }), null, 2));
+    showBudget(await api.budget());
+    await syncEnv();
     console.log('');
     return;
   }
 
-  die(`unknown command "${command}". Try: list | env | replace`);
+  die(`unknown command "${command}". Try: list | budget | env | replace | heal`);
 }
 
 main().catch((err) => die(err?.stack || String(err)));

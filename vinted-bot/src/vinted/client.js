@@ -170,7 +170,7 @@ function proxyLabel(proxy) {
 
 function healthOf(proxy) {
   const key = proxyKey(proxy);
-  if (!health.has(key)) health.set(key, { fails: 0, deadUntil: 0 });
+  if (!health.has(key)) health.set(key, { fails: 0, deadUntil: 0, deadSince: 0 });
   return health.get(key);
 }
 
@@ -192,6 +192,10 @@ export function noteProxyFailure(proxy, err, at = Date.now()) {
   // that has just come back and failed again goes straight out.
   if (state.fails >= proxyFailThreshold && state.deadUntil <= at) {
     state.deadUntil = at + proxyDeadCooldownSec * 1000;
+    // the first drop of an unbroken run of drops. It survives the re-tests in
+    // between, so it measures how long this proxy has actually been gone —
+    // which is what tells a blip apart from something worth buying a new IP for
+    if (!state.deadSince) state.deadSince = at;
     logger.warn(
       `${proxyLabel(proxy)} dropped from rotation after ${state.fails} connection failures ` +
         `(${err?.message || 'no answer'}); re-tested in ${proxyDeadCooldownSec}s`,
@@ -207,6 +211,7 @@ export function noteProxyAlive(proxy) {
   }
   state.fails = 0;
   state.deadUntil = 0;
+  state.deadSince = 0;
   return state;
 }
 
@@ -217,10 +222,12 @@ export function proxyHealth(at = Date.now()) {
     const state = healthOf(proxy);
     return {
       index: i + 1,
+      proxy,
       direct: !proxy,
       alive: state.deadUntil <= at,
       fails: state.fails,
       downForSec: Math.max(0, Math.round((state.deadUntil - at) / 1000)),
+      deadForSec: state.deadSince ? Math.round((at - state.deadSince) / 1000) : 0,
     };
   });
   return { total: entries.length, alive: entries.filter((e) => e.alive).length, entries };
@@ -228,6 +235,29 @@ export function proxyHealth(at = Date.now()) {
 
 /** Tests drive the rotation directly; nothing in the bot resets health. */
 export const resetProxyHealth = () => health.clear();
+
+/**
+ * Swap one proxy for another without a restart.
+ *
+ * `config.vinted.proxies` is read live by sessionFor(), so replacing an entry
+ * in place is all the rotation needs — and in place is the point: PROXY_SAFE_RPS
+ * is positional, so slot 2 must stay slot 2 or a residential rate silently
+ * becomes a datacenter one. The dead proxy's session and health go with it,
+ * because the new IP inherits nothing: not the cookies, not the failure count.
+ *
+ * @returns {boolean} false when the old proxy is not in the pool (already swapped)
+ */
+export function swapProxy(oldProxy, newProxy) {
+  const at = config.vinted.proxies.indexOf(oldProxy);
+  if (at < 0) return false;
+  config.vinted.proxies[at] = newProxy;
+  health.delete(proxyKey(oldProxy));
+  for (const key of [...sessions.keys()]) {
+    if (key.endsWith(`|${oldProxy}`)) sessions.delete(key);
+  }
+  logger.info(`proxy #${at + 1} swapped for a fresh IP and put back in rotation`);
+  return true;
+}
 
 function sessionFor(domain) {
   const routes = config.vinted.proxies.length ? config.vinted.proxies : [null];

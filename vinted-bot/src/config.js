@@ -201,6 +201,33 @@ export const config = {
     },
   },
 
+  /**
+   * Webshare, and the scarce thing it sells: a fixed number of manual proxy
+   * replacements per month that do not carry over. No token means the whole
+   * feature is simply absent — the pool still self-heals by dropping a dead
+   * proxy from rotation, it just never buys a new one.
+   */
+  webshare: {
+    token: (process.env.WEBSHARE_TOKEN || '').trim(),
+    // the reserve. Auto-replacement stops at this many left and says so; those
+    // last few are for a human who knows what they are spending them on.
+    alertThreshold: num(process.env.REPLACEMENT_ALERT_THRESHOLD, 3),
+    autoReplace: bool(process.env.PROXY_AUTOREPLACE, true),
+    // a burst of deaths is usually one upstream problem, not N dead IPs, and
+    // a month's budget can be drained in a minute. One per run, by default.
+    maxPerRun: num(process.env.PROXY_REPLACE_MAX_PER_RUN, 1),
+    checkEverySec: num(process.env.PROXY_REPLACE_CHECK_SEC, 900),
+    // how long a proxy has to have been continuously dead before it is worth
+    // a replacement. Must outlast several cooldowns: a proxy that comes back
+    // on its own cost nothing, and one bought for a blip cost a tenth of the
+    // month's budget.
+    deadForSec: num(process.env.PROXY_REPLACE_AFTER_SEC, 1800),
+    // the pool is swapped in place by default, which loses no polls. Set this
+    // when something supervises the process and a clean boot is preferred.
+    restart: bool(process.env.PROXY_REPLACE_RESTART, false),
+    envPath: process.env.ENV_PATH || '.env',
+  },
+
   // Someone who answers /support from inside the bot: the relay. 0 turns that
   // half off. The public handle below is the other half and needs nothing
   // running — a tap opens the chat in Telegram itself. Either one on its own

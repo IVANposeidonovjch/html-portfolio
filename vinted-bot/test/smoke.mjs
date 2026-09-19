@@ -23,7 +23,7 @@ const cfg = await import('../src/config.js');
 const { LANGS, LOCALES, allLabels, formatEvery, resolveLang, t } = await import('../src/i18n/index.js');
 const { STRATEGIES, extractItems, strategyByName, orderedStrategies, filtersLookHonoured } =
   await import('../src/vinted/endpoints.js');
-const { candidatesFor, endpointCache, isConnectionFailure, noteProxyAlive, noteProxyFailure, proxyHealth, resetProxyHealth } =
+const { candidatesFor, endpointCache, isConnectionFailure, noteProxyAlive, noteProxyFailure, proxyHealth, resetProxyHealth, swapProxy } =
   await import('../src/vinted/client.js');
 const { normalizeItem } = await import('../src/vinted/normalize.js');
 
@@ -299,6 +299,363 @@ await (async () => {
 
   resetProxyHealth();
   cfg.config.vinted.proxies = proxies;
+})();
+
+/* --------------------------- webshare autoreplace ------------------------ */
+
+await (async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { createWebshare, resetDate, firstOfNextMonth } = await import('../src/proxy/webshare.js');
+  const { mergePool, runReplacement, deadEnoughToReplace, forgetBudget, lastBudget } = await import(
+    '../src/proxy/autoreplace.js'
+  );
+  const { writeEnvValue, setValue, readValue } = await import('../src/proxy/envfile.js');
+  const { replacementLine } = await import('../src/monitor/capacity.js');
+
+  const row = (address, port, country) => ({
+    proxy_address: address,
+    port,
+    username: 'u',
+    password: 'p',
+    country_code: country,
+    city_name: 'Somewhere',
+  });
+  const url = (address, port) => `http://u:p@${address}:${port}`;
+
+  /* -- the .env line, which is the half that is easy to get wrong -- */
+
+  test('one assignment is rewritten in place and the rest of .env is untouched', () => {
+    const before = 'BOT_TOKEN=secret\nPROXIES=http://old\nLOG_LEVEL=info\n';
+    const after = setValue(before, 'PROXIES', 'http://new');
+    assert.equal(after, 'BOT_TOKEN=secret\nPROXIES=http://new\nLOG_LEVEL=info\n');
+    assert.equal(readValue(after, 'PROXIES'), 'http://new');
+    assert.equal(readValue(after, 'BOT_TOKEN'), 'secret', 'nothing else may move');
+    // an absent key is appended, never silently dropped
+    assert.match(setValue('A=1\n', 'PROXIES', 'x'), /^A=1\nPROXIES=x\n$/);
+  });
+
+  test('writing .env keeps a backup, and a no-op writes nothing at all', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'envtest-'));
+    const file = path.join(dir, '.env');
+    fs.writeFileSync(file, 'BOT_TOKEN=secret\nPROXIES=http://old\n');
+
+    const first = writeEnvValue(file, 'PROXIES', 'http://new');
+    assert.equal(first.changed, true);
+    assert.ok(fs.existsSync(first.backup), 'the old file has to survive somewhere');
+    assert.match(fs.readFileSync(first.backup, 'utf8'), /http:\/\/old/);
+    assert.match(fs.readFileSync(file, 'utf8'), /PROXIES=http:\/\/new/);
+    assert.match(fs.readFileSync(file, 'utf8'), /BOT_TOKEN=secret/, 'the token is still there');
+
+    const again = writeEnvValue(file, 'PROXIES', 'http://new');
+    assert.equal(again.changed, false, 'the same value is not a change');
+    assert.equal(again.backup, '', 'and leaves no backup behind');
+    assert.equal(fs.readdirSync(dir).filter((f) => f.includes('.bak-')).length, 1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /* -- order, because PROXY_SAFE_RPS is positional -- */
+
+  test('a replaced proxy takes the slot of the one it replaced', () => {
+    const old = [url('1.1.1.1', 100), url('2.2.2.2', 200), url('3.3.3.3', 300)];
+    const fresh = [row('1.1.1.1', 100, 'US'), row('9.9.9.9', 900, 'FR'), row('3.3.3.3', 300, 'DE')];
+    const { pool, swaps } = mergePool(old, fresh);
+    assert.deepEqual(pool, [url('1.1.1.1', 100), url('9.9.9.9', 900), url('3.3.3.3', 300)]);
+    assert.deepEqual(swaps, [{ index: 1, from: url('2.2.2.2', 200), to: url('9.9.9.9', 900) }]);
+  });
+
+  test('a proxy Webshare simply added lands on the end, not in somebody else seat', () => {
+    const old = [url('1.1.1.1', 100)];
+    const fresh = [row('1.1.1.1', 100, 'US'), row('8.8.8.8', 800, 'FR')];
+    const { pool, swaps } = mergePool(old, fresh);
+    assert.deepEqual(pool, [url('1.1.1.1', 100), url('8.8.8.8', 800)]);
+    assert.equal(swaps.length, 0, 'nothing was replaced, so nothing is a swap');
+  });
+
+  test('fewer new addresses than holes leaves the hole rather than inventing one', () => {
+    const old = [url('1.1.1.1', 100), url('2.2.2.2', 200)];
+    const { pool, swaps } = mergePool(old, [row('1.1.1.1', 100, 'US')]);
+    assert.deepEqual(pool, [url('1.1.1.1', 100), url('2.2.2.2', 200)], 'the dead one stays until there is a real replacement');
+    assert.equal(swaps.length, 0);
+  });
+
+  /* -- the budget, which is the whole point -- */
+
+  test('the reset date is read from the API, or falls back to the next month', () => {
+    assert.equal(resetDate({ current_period_end: '2026-10-05T00:00:00Z' }).toISOString().slice(0, 10), '2026-10-05');
+    assert.equal(resetDate({ proxy_replacements_reset_at: '2026-11-01' }).toISOString().slice(0, 10), '2026-11-01');
+    const at = Date.UTC(2026, 8, 19);
+    assert.equal(resetDate({}, at).toISOString().slice(0, 10), '2026-10-01', 'no field named, so say roughly');
+    assert.equal(firstOfNextMonth(Date.UTC(2026, 11, 20)).toISOString().slice(0, 10), '2027-01-01', 'December rolls the year');
+  });
+
+  test('a budget is read from the API and never assumed', async () => {
+    const api = createWebshare({
+      token: 'x',
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({ proxy_replacements_total: 10, proxy_replacements_used: 4, proxy_replacements_available: 6 }),
+      }),
+    });
+    const budget = await api.budget();
+    assert.equal(budget.total, 10);
+    assert.equal(budget.available, 6);
+    // a plan that reports no counts at all is an error, not a quiet zero: a
+    // zero would look like "no budget" and stop replacement forever
+    const mute = createWebshare({ token: 'x', fetch: async () => ({ ok: true, status: 200, text: async () => '{}' }) });
+    await assert.rejects(() => mute.budget(), /replacement count/);
+  });
+
+  test('the token is never in an error message, however the call fails', async () => {
+    const api = createWebshare({
+      token: 'super-secret-token',
+      fetch: async () => ({ ok: false, status: 401, text: async () => '{"detail":"bad"}' }),
+    });
+    const err = await api.budget().catch((e) => e);
+    assert.match(err.message, /rejected the token/);
+    for (const text of [err.message, err.body, String(err.stack)]) {
+      assert.ok(!text.includes('super-secret-token'), 'the token leaked into an error');
+    }
+  });
+
+  /* -- the policy: when it spends, and when it refuses -- */
+
+  const fakeApi = ({ available = 10, rows, replaced }) => {
+    const calls = [];
+    let listed = 0;
+    return {
+      calls,
+      hasToken: () => true,
+      budget: async () => ({
+        total: 10,
+        used: 10 - available,
+        available,
+        resetsAt: new Date('2026-10-01'),
+        checkedAt: Date.now(),
+      }),
+      listProxies: async () => (listed++ === 0 ? rows : replaced ?? rows),
+      replace: async (args) => {
+        calls.push(args);
+        return { ok: true };
+      },
+    };
+  };
+
+  const pool = [url('1.1.1.1', 100), url('2.2.2.2', 200)];
+  const live = [row('1.1.1.1', 100, 'US'), row('2.2.2.2', 200, 'FR')];
+  const healed = [row('1.1.1.1', 100, 'US'), row('7.7.7.7', 700, 'FR')];
+
+  const killProxy = (proxy, forSec, at) => {
+    for (let i = 0; i < cfg.config.vinted.proxyFailThreshold; i++) {
+      noteProxyFailure(proxy, new Error('Connect Timeout Error'), at - forSec * 1000);
+    }
+  };
+
+  const withPool = async (fn) => {
+    const saved = cfg.config.vinted.proxies;
+    const savedEnv = cfg.config.webshare.envPath;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wstest-'));
+    const file = path.join(dir, '.env');
+    fs.writeFileSync(file, `BOT_TOKEN=secret\nPROXIES=${pool.join(',')}\n`);
+    cfg.config.vinted.proxies = pool.slice();
+    cfg.config.webshare.envPath = file;
+    resetProxyHealth();
+    forgetBudget();
+    try {
+      return await fn(file);
+    } finally {
+      cfg.config.vinted.proxies = saved;
+      cfg.config.webshare.envPath = savedEnv;
+      resetProxyHealth();
+      forgetBudget();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  const now = Date.now();
+
+  const nothingDead = await withPool(() =>
+    runReplacement({ api: fakeApi({ rows: live }), at: now }),
+  );
+  test('a healthy pool spends nothing but still reads the budget', () => {
+    assert.equal(nothingDead.status, 'ok');
+    assert.equal(nothingDead.replaced.length, 0);
+    assert.equal(nothingDead.budget.available, 10, 'the number /stats shows comes from here');
+  });
+
+  const blip = await withPool(() => {
+    killProxy(pool[1], 60, now); // down a minute, which is not down
+    return runReplacement({ api: fakeApi({ rows: live }), at: now });
+  });
+  test('a proxy that has been down a minute is not worth a tenth of the month', () => {
+    assert.equal(blip.wanted, 0, 'deadForSec has not elapsed, so it is not a candidate');
+    assert.equal(blip.replaced.length, 0);
+  });
+
+  const realDeath = await withPool(async (file) => {
+    killProxy(pool[1], cfg.config.webshare.deadForSec + 60, now);
+    const api = fakeApi({ rows: live, replaced: healed });
+    const result = await runReplacement({ api, at: now });
+    return { result, api, env: fs.readFileSync(file, 'utf8'), pool: cfg.config.vinted.proxies.slice() };
+  });
+  test('a proxy that stayed dead is replaced in its own country', () => {
+    assert.equal(realDeath.result.status, 'ok');
+    assert.equal(realDeath.result.replaced.length, 1);
+    assert.equal(realDeath.result.replaced[0].country, 'FR', 'the pool geography is not redrawn by a failure');
+    const [call] = realDeath.api.calls;
+    assert.deepEqual(call.toReplace, { type: 'ip_range', ip_ranges: ['2.2.2.2/32'] });
+    assert.deepEqual(call.replaceWith, [{ type: 'country', country_code: 'FR', count: 1 }]);
+    assert.equal(call.dryRun, false);
+  });
+
+  test('and the pool and .env both follow it, in the same slot', () => {
+    assert.deepEqual(realDeath.pool, [url('1.1.1.1', 100), url('7.7.7.7', 700)], 'swapped in place, no restart');
+    assert.match(realDeath.env, /PROXIES=http:\/\/u:p@1\.1\.1\.1:100,http:\/\/u:p@7\.7\.7\.7:700/);
+    assert.match(realDeath.env, /BOT_TOKEN=secret/, '.env survived the rewrite');
+  });
+
+  const atReserve = await withPool(() => {
+    killProxy(pool[1], cfg.config.webshare.deadForSec + 60, now);
+    return runReplacement({ api: fakeApi({ rows: live, available: cfg.config.webshare.alertThreshold }), at: now });
+  });
+  test('the reserve is a floor, not a warning line: automation stops at it', () => {
+    assert.equal(atReserve.status, 'reserve');
+    assert.equal(atReserve.replaced.length, 0, 'the last few are for a person to spend');
+    assert.equal(atReserve.wanted, 1, 'and it still reports that something needs doing');
+    assert.equal(atReserve.lowBudget, true);
+  });
+
+  const justAbove = await withPool(() => {
+    killProxy(pool[1], cfg.config.webshare.deadForSec + 60, now);
+    return runReplacement({
+      api: fakeApi({ rows: live, replaced: healed, available: cfg.config.webshare.alertThreshold + 1 }),
+      at: now,
+    });
+  });
+  test('one above the reserve is spendable, and lands exactly on the reserve', () => {
+    assert.equal(justAbove.status, 'ok');
+    assert.equal(justAbove.replaced.length, 1);
+  });
+
+  const burst = await withPool(() => {
+    for (const proxy of pool) killProxy(proxy, cfg.config.webshare.deadForSec + 60, now);
+    return runReplacement({ api: fakeApi({ rows: live, replaced: healed }), at: now, maxPerRun: 1 });
+  });
+  test('a burst of deaths cannot drain the month in one run', () => {
+    assert.equal(burst.wanted, 2, 'both are genuinely dead');
+    assert.equal(burst.replaced.length, 1, 'and exactly maxPerRun are bought');
+  });
+
+  const dry = await withPool(async (file) => {
+    killProxy(pool[1], cfg.config.webshare.deadForSec + 60, now);
+    const api = fakeApi({ rows: live, replaced: healed });
+    const result = await runReplacement({ api, at: now, dryRun: true });
+    return { result, api, env: fs.readFileSync(file, 'utf8') };
+  });
+  test('a dry run asks Webshare and changes nothing here', () => {
+    assert.equal(dry.api.calls[0].dryRun, true);
+    assert.match(dry.env, /PROXIES=http:\/\/u:p@1\.1\.1\.1:100,http:\/\/u:p@2\.2\.2\.2:200/, '.env untouched');
+  });
+
+  const noToken = await withPool(() =>
+    runReplacement({ api: { hasToken: () => false }, at: now }),
+  );
+  test('no token degrades to exactly the behaviour that existed before', () => {
+    assert.equal(noToken.status, 'no-token');
+    assert.equal(noToken.replaced.length, 0);
+    assert.equal(noToken.budget, null, 'and nothing was called');
+  });
+
+  const broken = await withPool(() => {
+    killProxy(pool[1], cfg.config.webshare.deadForSec + 60, now);
+    return runReplacement({
+      api: { hasToken: () => true, budget: async () => { throw new Error('webshare is down'); } },
+      at: now,
+    });
+  });
+  test('a Webshare outage is not a bot outage', () => {
+    assert.equal(broken.status, 'failed');
+    assert.match(broken.error, /webshare is down/);
+    assert.equal(broken.replaced.length, 0);
+  });
+
+  /* -- what the operator sees -- */
+
+  test('/stats names the allowance, or says why it cannot', () => {
+    const saved = cfg.config.webshare.token;
+    try {
+      cfg.config.webshare.token = '';
+      forgetBudget();
+      assert.match(replacementLine(), /WEBSHARE_TOKEN не задан/);
+      cfg.config.webshare.token = 'x';
+      assert.match(replacementLine(), /ещё не проверялись/, 'never guess a number we have not read');
+    } finally {
+      cfg.config.webshare.token = saved;
+      forgetBudget();
+    }
+  });
+
+  // read inside the pool fixture: its teardown clears the cache, which is the
+  // point of the cache existing only as long as something is running
+  const statsLine = await (async () => {
+    const saved = cfg.config.webshare.token;
+    cfg.config.webshare.token = 'x';
+    try {
+      return await withPool(async () => {
+        await runReplacement({ api: fakeApi({ rows: live, available: 2 }), at: now });
+        return replacementLine(lastBudget().checkedAt + 5 * 60000);
+      });
+    } finally {
+      cfg.config.webshare.token = saved;
+    }
+  })();
+
+  const standing = await (async () => {
+    const { Monitor } = await import('../src/monitor/scheduler.js');
+    const monitor = new Monitor({});
+    const sent = [];
+    monitor.onProxyReplaced = (r) => sent.push(`proxy:${r.status}`);
+    monitor.onReplacementBudget = () => sent.push('budget');
+    const reserve = async () => ({
+      status: 'reserve',
+      budget: { total: 10, used: 8, available: 2, resetsAt: new Date('2026-10-01'), checkedAt: Date.now() },
+      replaced: [],
+      wanted: 1,
+      lowBudget: true,
+      restartNeeded: false,
+    });
+    for (let i = 0; i < 4; i++) await monitor.checkProxies(reserve);
+    const afterRecovery = [...sent];
+    // the allowance resets and the pool is healthy again
+    await monitor.checkProxies(async () => ({
+      status: 'ok',
+      budget: { total: 10, used: 0, available: 10, resetsAt: new Date('2026-11-01'), checkedAt: Date.now() },
+      replaced: [],
+      wanted: 0,
+      lowBudget: false,
+      restartNeeded: false,
+    }));
+    await monitor.checkProxies(reserve);
+    return { afterRecovery, all: sent };
+  })();
+
+  test('a standing problem is reported once, not every quarter of an hour', () => {
+    assert.deepEqual(standing.afterRecovery, ['proxy:reserve', 'budget'], 'four identical checks, two messages');
+  });
+
+  test('but it is reported again once it has cleared and come back', () => {
+    assert.deepEqual(standing.all, ['proxy:reserve', 'budget', 'proxy:reserve', 'budget']);
+  });
+
+  test('and once it has been read, it shows the count, the reset and its own age', () => {
+    assert.match(statsLine, /2 из 10/);
+    assert.match(statsLine, /⚠️/, 'at the reserve it has to look like a problem');
+    assert.match(statsLine, /2026-10-01/);
+    assert.match(statsLine, /5 мин назад/);
+  });
 })();
 
 /* ------------------------------ normalizing ----------------------------- */

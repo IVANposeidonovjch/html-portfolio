@@ -70,6 +70,11 @@ bot.chatType('private').command('stats', async (ctx) => {
   );
 });
 
+/** Everyone who gets told when the machinery needs a person. */
+const tellAdmins = (text) => {
+  for (const id of config.adminIds) bot.api.sendMessage(id, text).catch(() => {});
+};
+
 /**
  * Past 90% nobody is reading the log. The admins are told once when it happens
  * and once when it is over, and /stats carries the detail for whoever asks.
@@ -81,7 +86,42 @@ monitor.onCapacity = ({ level, report }) => {
       ? `🚨 Пул прокси загружен на ${Math.round(report.utilization * 100)}%: ${load}.\n` +
         'Новые поиски скоро начнут отклоняться. Добавь прокси в PROXIES или подними PROXY_SAFE_RPS.'
       : `✅ Нагрузка на пул вернулась в норму: ${load}.`;
-  for (const id of config.adminIds) bot.api.sendMessage(id, text).catch(() => {});
+  tellAdmins(text);
+};
+
+/**
+ * A proxy bought, or one that needed buying and was not. Both are worth a
+ * message: the first is money leaving a small monthly allowance, the second
+ * is the pool running short until somebody acts.
+ */
+monitor.onProxyReplaced = (result) => {
+  if (result.status === 'reserve') {
+    tellAdmins(
+      `⚠️ ${result.wanted} прокси не отвечают, но в этом месяце осталось ` +
+        `${result.budget.available} замен — это резерв (REPLACEMENT_ALERT_THRESHOLD=` +
+        `${config.webshare.alertThreshold}). Автозамена их не тратит.\n` +
+        'Заменить вручную: node tools/webshare.mjs replace --ip <адрес> --to <страна> --go',
+    );
+    return;
+  }
+  if (result.replaced.length) {
+    const which = result.replaced.map((r) => `#${r.index} (${r.country})`).join(', ');
+    tellAdmins(
+      `🔁 Заменены мёртвые прокси: ${which}. Осталось замен в этом месяце: ` +
+        `${result.budget?.available ?? '?'}.` +
+        (result.exiting ? '\nПерезапускаюсь, чтобы подхватить новый пул.' : ''),
+    );
+  }
+};
+
+/** The allowance is small and does not carry over — better early than short. */
+monitor.onReplacementBudget = (budget) => {
+  const resets = (budget.resetsAt instanceof Date ? budget.resetsAt : new Date(budget.resetsAt))
+    .toISOString()
+    .slice(0, 10);
+  tellAdmins(
+    `⚠️ Осталось всего ${budget.available} замен прокси в этом месяце (сброс ${resets}).`,
+  );
 };
 
 /**
