@@ -5,7 +5,7 @@ import { logger } from '../util/logger.js';
 import { jitter, sleep } from '../util/ratelimit.js';
 import { fetchCatalog, VintedError } from '../vinted/client.js';
 import { normalizeAll } from '../vinted/normalize.js';
-import { CapacityAlarm, capacityReport } from './capacity.js';
+import { CapacityAlarm, capacityReport, sweepOverLimit } from './capacity.js';
 
 const TICK_MS = 1000;
 const BATCH = 40; // searches picked up per tick
@@ -22,20 +22,50 @@ export class Monitor {
     this.alarm = new CapacityAlarm();
     /** Set by the caller to reach the admins when the pool is running hot. */
     this.onCapacity = null;
+    /** Set by the caller to warn a user their links are over the new limit. */
+    this.onOverLimit = null;
+    this.onLimitEnforced = null;
   }
 
   start() {
     this.loop();
     this.prune = setInterval(() => store.pruneOldRows(), 6 * 3600 * 1000);
     this.watch = setInterval(() => this.checkCapacity(), config.capacity.checkEverySec * 1000);
+    // hourly is often enough for a window measured in days, and it means a
+    // deadline is never missed by more than an hour
+    this.limits = setInterval(() => this.checkLimits(), 3600 * 1000);
     // a restart into an already overloaded pool should say so now, not in a minute
     this.checkCapacity();
+    this.checkLimits();
   }
 
   stop() {
     this.stopped = true;
     clearInterval(this.prune);
     clearInterval(this.watch);
+    clearInterval(this.limits);
+  }
+
+  /**
+   * Downgrades catch up with the links somebody kept. Whoever just went over
+   * gets told they have until a date; whoever ran the clock out has the extras
+   * paused and is told that too — a search going quiet with no explanation is
+   * the thing this is here to avoid.
+   */
+  checkLimits() {
+    try {
+      const { started, enforced } = sweepOverLimit();
+      for (const over of started) {
+        logger.info(`over limit: ${over.tgId} has ${over.active}/${over.limit} on ${over.plan}`);
+        this.onOverLimit?.(over);
+      }
+      for (const done of enforced) {
+        logger.info(`paused ${done.paused} search(es) for ${done.tgId}, over ${done.limit}`);
+        this.onLimitEnforced?.(done);
+      }
+    } catch (err) {
+      logger.error('over-limit sweep failed:', err);
+    }
   }
 
   /** Log every crossing; hand the serious ones to whoever can act on them. */
@@ -118,14 +148,54 @@ export class Monitor {
     const maxId = items.reduce((m, i) => Math.max(m, i.id), 0);
 
     if (!search.primed) {
-      // First poll: remember what already exists, notify nothing.
+      /**
+       * First poll. Everything already listed becomes the baseline — except
+       * that the newest one of it is sent straight away, so adding a link
+       * proves itself immediately instead of opening with silence and a
+       * promise. Every poll after this one only carries genuinely new
+       * listings, through the same dedupe as everything else.
+       */
       const cutoff = config.vinted.firstRunMaxAgeMin
         ? store.now() - config.vinted.firstRunMaxAgeMin * 60
         : Infinity;
       const baseline = items.filter((i) => !(cutoff !== Infinity && i.uploadedAt && i.uploadedAt > cutoff));
       store.seen.addMany(search.id, baseline.map((i) => i.id));
+
+      const newest = items.reduce((best, i) => (!best || i.id > best.id ? i : best), null);
+      let showed = false;
+      if (newest) {
+        const dest = store.destKey(search.dest_chat_id, search.dest_thread_id);
+        const alreadyThere = config.dedupePerDestination && store.seen.destHas(dest, newest.id);
+        if (!alreadyThere) {
+          // it is in the baseline whatever the cutoff said, or the next poll
+          // would send it a second time
+          store.seen.add(search.id, newest.id);
+          if (config.dedupePerDestination) store.seen.destAdd(dest, newest.id);
+          this.sender.enqueue({
+            chatId: search.dest_chat_id,
+            threadId: search.dest_thread_id || undefined,
+            item: newest,
+            searchName: search.name,
+            searchId: search.id,
+            lang: user?.lang || 'en',
+            burst: burstFor(plan),
+            perMinute: ratePerMinuteFor(plan),
+            // the near-miss note measures lateness against arrival, and this
+            // listing was found rather than missed — it would read as an
+            // accusation about a delay that never happened
+            note: null,
+          });
+          store.bumpSent.run(1, search.id);
+          this.notifications++;
+          showed = true;
+        }
+      }
+
       store.markRun.run(store.now(), nextAt, maxId, search.id);
-      logger.info(`primed search=${search.id} "${search.name}" baseline=${baseline.length}`);
+      logger.info(
+        `primed search=${search.id} "${search.name}" baseline=${baseline.length}` +
+          `${showed ? ` + sent the newest (${newest.id})` : ''}`,
+      );
       return;
     }
 

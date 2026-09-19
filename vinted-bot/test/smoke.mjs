@@ -421,15 +421,24 @@ const items = (ids) => ids.map((id) => normalizeItem(rawItem(id), 'www.vinted.de
 
 let s1 = mkSearch('Raf', -100, 7);
 
-test('first poll only primes the baseline, sends nothing', () => {
+test('the first poll shows the newest match instead of opening with silence', () => {
   monitor.handleResult(s1, items([10, 11, 12]));
-  assert.equal(sent.length, 0);
+  assert.deepEqual(sent.map((j) => j.item.id), [12], 'the newest of what is already listed');
+  assert.equal(sent[0].note, null, 'it was found, not missed — no lateness note on it');
   s1 = store.getSearch.get(s1.id);
   assert.equal(s1.primed, 1);
   assert.equal(s1.last_item_id, 12);
+  assert.equal(s1.sent_count, 1, 'and it counts as delivered');
+});
+
+test('the rest of the first page is baselined, not replayed', () => {
+  sent.length = 0;
+  monitor.handleResult(store.getSearch.get(s1.id), items([12, 11, 10]));
+  assert.equal(sent.length, 0, 'nothing on that page may arrive twice');
 });
 
 test('second poll sends only genuinely new listings, oldest first', () => {
+  sent.length = 0;
   monitor.handleResult(s1, items([14, 13, 12, 11]));
   assert.deepEqual(sent.map((j) => j.item.id), [13, 14]);
   assert.equal(sent[0].chatId, -100);
@@ -460,7 +469,9 @@ test('a second search into the same topic does not duplicate the same item', () 
 test('a different topic of the same group still receives the item', () => {
   sent.length = 0;
   let s3 = mkSearch('Raf other topic', -100, 9);
-  monitor.handleResult(s3, items([14]));           // prime
+  monitor.handleResult(s3, items([14]));           // prime: 14 is new to THIS topic
+  assert.deepEqual(sent.map((j) => j.item.id), [14], 'a fresh topic gets the newest at once');
+  sent.length = 0;
   s3 = store.getSearch.get(s3.id);
   monitor.handleResult(s3, items([21, 14]));
   assert.deepEqual(sent.map((j) => j.item.id), [21]);
@@ -901,11 +912,26 @@ test('the floor is a real plan that grants nothing and is never sold', () => {
   assert.notEqual(cfg.config.limits.locked, undefined, 'the floor needs its own limit, not free\'s');
 });
 
-test('a brand new account lands on the floor, not on a tier', () => {
+test('a brand new account is handed the starter day, with no signup step', () => {
   const fresh = store.upsertUser(7500, 'newcomer', 'en');
-  assert.equal(fresh.plan, 'locked', 'signing up is not a purchase');
-  assert.equal(store.effectivePlan(fresh), 'locked');
-  assert.equal(fresh.plan_until, null, 'the floor does not expire, there is nothing to expire');
+  assert.equal(fresh.plan, 'starter');
+  assert.equal(store.effectivePlan(fresh), 'starter');
+  const hours = (fresh.plan_until - store.now()) / 3600;
+  assert.ok(Math.abs(hours - cfg.config.payments.starterHours) < 0.1, `got ${hours}h`);
+});
+
+test('and it is handed out once, not renewed on every /start', () => {
+  const first = store.getUser(7500).plan_until;
+  store.setPlan.run('locked', null, 7500);
+  const again = store.upsertUser(7500, 'newcomer', 'en');
+  assert.equal(again.plan, 'locked', 'an account that already exists has had its day');
+  assert.notEqual(again.plan_until, first);
+});
+
+test('the starter day runs out into the floor by itself', () => {
+  store.upsertUser(7503, 'daytripper', 'en');
+  store.setPlan.run('starter', store.now() - 1, 7503);
+  assert.equal(store.effectivePlan(store.getUser(7503)), 'locked');
 });
 
 test('a trial that ran out is the floor again, lazily, on read', () => {
@@ -928,6 +954,7 @@ test('the floor and a lapsed plan are both polled for nothing', () => {
     }).lastInsertRowid;
 
   store.upsertUser(7502, 'onfloor', 'en');
+  store.setPlan.run('locked', null, 7502); // the starter day would poll happily
   const onFloor = mk(7502);
   const due = () => store.dueSearches.all(store.now(), store.now(), 100).map((s) => s.id);
   assert.ok(!due().includes(onFloor), 'an account holding nothing costs the pool nothing');
@@ -953,7 +980,7 @@ test('the reserved tier exists, is hidden, and has no price', () => {
 test('Sniper Elite is a normal public tier now', () => {
   assert.ok(cfg.SELLABLE_PLANS.includes('turbo'), 'it is on sale');
   assert.ok(!cfg.isHiddenPlan('turbo'), 'and listed publicly');
-  assert.deepEqual(cfg.PUBLIC_PLANS, ['free', 'basic', 'pro', 'turbo']);
+  assert.deepEqual(cfg.PUBLIC_PLANS, ['starter', 'free', 'basic', 'pro', 'turbo']);
   assert.ok(cfg.usdFor('turbo') > cfg.usdFor('pro'), 'priced above the tier below it');
 });
 
@@ -974,7 +1001,7 @@ test('paid speed rises with the tier, free and basic get no advantage', () => {
 test('every plan has its own polling and limits, none falls back to free', () => {
   // intervalFor() lands on free for an unknown plan, which would quietly make a
   // paid tier the slowest of all
-  for (const plan of cfg.PLANS.filter((p) => p !== 'free' && p !== 'locked')) {
+  for (const plan of cfg.PLANS.filter((p) => !['free', 'locked', 'starter'].includes(p))) {
     assert.ok(cfg.intervalFor(plan) <= cfg.intervalFor('free'), `${plan} polls slower than free`);
     assert.ok(cfg.searchLimitFor(plan) > cfg.searchLimitFor('free'), `${plan} has free's link limit`);
   }
@@ -1025,7 +1052,8 @@ await (async () => {
       dest_chat_id: userId, dest_thread_id: null, next_run_at: 0, created_at: store.now(),
     }).lastInsertRowid;
 
-  store.upsertUser(7001, 'slowpoke', 'en'); // free: 900s
+  store.upsertUser(7001, 'slowpoke', 'en');
+  store.setPlan.run('free', store.now() + 86400, 7001); // Scout: 900s
   store.upsertUser(7002, 'quick', 'en');
   store.setPlan.run('turbo', store.now() + 86400, 7002); // 30s
 
@@ -1588,6 +1616,7 @@ await (async () => {
 await (async () => {
   // a user with a hostile display name: the report must not break on it
   store.upsertUser(4242, '<b>pwn</b>', 'de');
+  store.setPlan.run('locked', null, 4242); // the starter day is not what this tests
   const evil = store.insertSearch.run({
     user_id: 4242, name: 'Raf <script>', url: parsed.normalizedUrl, domain: parsed.domain,
     canonical_key: parsed.canonicalKey, api_query: JSON.stringify(parsed.query),
@@ -1877,6 +1906,7 @@ await (async () => {
 
   const TRIAL = 7600;
   store.upsertUser(TRIAL, 'trialbuyer', 'en');
+  store.setPlan.run('locked', null, TRIAL); // as if their starter day had passed
   const lockedScreen = await drive(pressUpdate('m:plan', TRIAL), TRIAL);
 
   test('an account holding nothing is told so, and offered the way out', () => {
@@ -1918,7 +1948,7 @@ await (async () => {
       `Scout's price does not say how long it lasts:\n${text}`,
     );
     assert.ok(!/\$\d+\/\d+h/.test(text), 'a week must not be advertised as a count of hours');
-    assert.ok(!/just \+\$\d+ a month/.test(text), 'and a day-to-month price delta is not offered');
+    assert.ok(!/just \+\$\d+ a month/.test(text), 'and a week-to-month price delta is not offered');
   });
 
   // the last day of the trial: days drop out and the countdown gets finer
@@ -1928,8 +1958,9 @@ await (async () => {
 
   test('the countdown changes unit as the trial runs out', () => {
     const text = lastDay.find((c) => c.method === 'editMessageText').payload.text;
-    assert.match(text, /Trial: 5h \d+m left/, `expected hours and minutes in:\n${text}`);
-    assert.ok(!/\dd /.test(text), 'no days left to name');
+    const line = text.split('\n').find((l) => l.startsWith('Trial:'));
+    assert.match(line, /^Trial: 5h \d+m left$/, `expected hours and minutes in: ${line}`);
+    assert.ok(!/\dd/.test(line), 'no days left to name on the countdown itself');
   });
 
   // a shorter window must say so everywhere rather than keep advertising a week
@@ -2212,6 +2243,122 @@ await (async () => {
   store.setPlan.run('locked', null, SUB);
   store.setPlan.run('locked', null, LEGACY);
 
+/* ---------------------- the starter day, on screen -------------------- */
+
+  const NEWCOMER = 7900;
+  store.upsertUser(NEWCOMER, 'walkedin', 'en');
+  const starterScreen = await drive(pressUpdate('m:plan', NEWCOMER), NEWCOMER);
+
+  test('somebody who just arrived is already on something, and can add a link', () => {
+    const text = starterScreen.find((c) => c.method === 'editMessageText').payload.text;
+    assert.ok(text.includes(LOCALES.en['plan.name.starter']), `not on the starter day:\n${text}`);
+    assert.match(text, /Free day: (\d+d \d+h|\d+h \d+m) left/, 'and it counts down');
+    assert.match(text, /Link limit: 2/);
+    assert.ok(!text.includes(LOCALES.en['plan.lockedNote']), 'nothing is locked on day one');
+    // the row says it is a day, not a free tier
+    assert.match(text, /Free — \$0\/1d/, 'a bare $0 would read as free forever');
+    assert.ok(
+      !/a month/.test(text.split(LOCALES.en['plan.tiersHeader'])[1] ?? ''),
+      'a free day and a one-dollar week do not subtract into a monthly figure',
+    );
+  });
+
+  const starterAdd = await drive(pressUpdate('m:add', NEWCOMER), NEWCOMER);
+  test('and /add opens for them without a payment first', () => {
+    const text = starterAdd.find((c) => c.method === 'editMessageText').payload.text;
+    assert.match(text, /vinted\.de\/catalog/, `the add prompt should open:\n${text}`);
+  });
+
+/* ----------------- the grace window before a downgrade ------------------ */
+
+await (async () => {
+  const OVER = 7800;
+  store.upsertUser(OVER, 'downgraded', 'en');
+  store.setPlan.run('pro', store.now() + 86400, OVER); // 100 links
+  const made = [];
+  for (const name of ['a', 'b', 'c']) {
+    made.push(
+      store.insertSearch.run({
+        user_id: OVER, name, url: parsed.normalizedUrl, domain: parsed.domain,
+        canonical_key: parsed.canonicalKey, api_query: JSON.stringify(parsed.query),
+        dest_chat_id: OVER, dest_thread_id: null, next_run_at: 0, created_at: store.now(),
+      }).lastInsertRowid,
+    );
+  }
+
+  const active = () => store.listSearches.all(OVER).filter((s) => s.enabled).map((s) => s.id);
+
+  test('inside the allowance, nothing is touched and no clock starts', () => {
+    const { started } = capacity.sweepOverLimit();
+    assert.ok(!started.some((o) => o.tgId === OVER));
+    assert.equal(store.getUser(OVER).limit_grace_until, null);
+    assert.equal(active().length, 3);
+  });
+
+  // the downgrade: Scout allows two, they are holding three
+  store.setPlan.run('free', store.now() + 86400, OVER);
+  const first = capacity.sweepOverLimit();
+
+  test('a downgrade starts a clock instead of pausing anything on the spot', () => {
+    const warned = first.started.find((o) => o.tgId === OVER);
+    assert.ok(warned, 'they have to be told');
+    assert.equal(warned.limit, cfg.searchLimitFor('free'));
+    assert.equal(warned.active, 3);
+    assert.equal(active().length, 3, 'and nothing has stopped yet');
+    const deadline = store.getUser(OVER).limit_grace_until;
+    const window = cfg.config.payments.downgradeGraceHours * 3600;
+    assert.ok(Math.abs(deadline - (store.now() + window)) < 10, `deadline is ${deadline - store.now()}s out`);
+  });
+
+  test('and the clock is not restarted on every sweep', () => {
+    const deadline = store.getUser(OVER).limit_grace_until;
+    const again = capacity.sweepOverLimit();
+    assert.ok(!again.started.some((o) => o.tgId === OVER), 'they are warned once, not hourly');
+    assert.equal(store.getUser(OVER).limit_grace_until, deadline);
+    assert.equal(active().length, 3);
+  });
+
+  const overScreen = await drive(pressUpdate('m:plan', OVER), OVER);
+  test('the plan screen carries the deadline while it runs', () => {
+    const text = overScreen.find((c) => c.method === 'editMessageText').payload.text;
+    assert.match(text, /trim to 2 links within/i, `no deadline on the screen:\n${text}`);
+    assert.match(text, /In use: 3/, 'and the count that triggered it');
+  });
+
+  // ...and what happens when it runs out
+  const expired = capacity.sweepOverLimit(store.getUser(OVER).limit_grace_until + 1);
+
+  test('when it runs out the extras pause, newest first, and nothing is deleted', () => {
+    const done = expired.enforced.find((e) => e.tgId === OVER);
+    assert.ok(done, 'the deadline has to actually mean something');
+    assert.equal(done.paused, 1, 'three down to the two Scout allows');
+    assert.deepEqual(active(), made.slice(0, 2), 'the ones held longest are the ones kept');
+    assert.equal(store.listSearches.all(OVER).length, 3, 'and the third still exists, just paused');
+    assert.equal(store.getUser(OVER).limit_grace_until, null, 'the clock is spent');
+  });
+
+  test('going back inside the allowance clears a running clock', () => {
+    store.setPlan.run('pro', store.now() + 86400, OVER);
+    store.toggleSearch.run(1, made[2], OVER); // re-enable the paused one
+    capacity.sweepOverLimit();
+    store.setPlan.run('free', store.now() + 86400, OVER);
+    capacity.sweepOverLimit(); // over again: clock starts
+    assert.ok(store.getUser(OVER).limit_grace_until, 'clock running');
+    store.toggleSearch.run(0, made[2], OVER); // they trim it themselves
+    capacity.sweepOverLimit();
+    assert.equal(store.getUser(OVER).limit_grace_until, null, 'trimming stops the countdown');
+  });
+
+  test('the floor is left alone — its searches already do not run', () => {
+    store.setPlan.run('locked', null, OVER);
+    store.toggleSearch.run(1, made[2], OVER);
+    capacity.sweepOverLimit(store.now() + 999999);
+    assert.equal(active().length, 3, 'pausing them would only mean re-enabling them on payday');
+  });
+
+  for (const id of made) store.deleteSearch.run(id, OVER);
+})();
+
   const rejected = await runCommand('/grant 4242 platinum 30', 1);
   test('/grant refuses a plan that does not exist', () => {
     assert.match(rejected, /Usage/);
@@ -2267,6 +2414,7 @@ await (async () => {
 
   const BUYER = 7200;
   store.upsertUser(BUYER, 'buyer', 'en');
+  store.setPlan.run('locked', null, BUYER);
   const seatsBefore = cfg.config.seats.turbo;
   const starsBefore = cfg.config.payments.stars.turbo;
   cfg.config.payments.stars.turbo = 500;
@@ -2385,8 +2533,9 @@ await (async () => {
     assert.match(edit.payload.text, /Margiela/);
     const [search] = store.listSearches.all(ADDER);
     assert.ok(search, 'the search must exist this time');
+    const window = cfg.intervalFor(store.effectivePlan(store.getUser(ADDER)));
     const offset = search.next_run_at - store.now();
-    assert.ok(offset >= 0 && offset < cfg.intervalFor('free'), `first poll ${offset}s away, outside the window`);
+    assert.ok(offset >= 0 && offset < window, `first poll ${offset}s away, outside the ${window}s window`);
     store.deleteSearch.run(search.id, ADDER);
   });
 })();

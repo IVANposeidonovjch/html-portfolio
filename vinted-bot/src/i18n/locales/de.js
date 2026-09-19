@@ -126,6 +126,14 @@ Beispiel:
   'plan.tiers': 'Free — {free} Sek · Basic — {basic} Sek · Pro — {pro} Sek',
   'plan.invoiceDesc': '{days} Tage · ~{seconds} Sek Intervall · bis zu {limit} Links',
   'pay.ok': '✅ {plan} für {days} Tage aktiviert.',
+  'plan.name.starter': 'Free',
+  'plan.starterLeft': 'Gratis-Tag: noch {left}',
+  'plan.overLimit':
+    '⚠️ Du hast mehr Links, als dein Tarif erlaubt — reduzier innerhalb von {left} auf {limit}, sonst pausieren die überzähligen von selbst.',
+  'limit.warned':
+    '⚠️ Dein Tarif erlaubt {limit} Links, du hast {active}. Reduzier innerhalb von {left} auf {limit}, dann passiert nichts — sonst pausieren die neuesten überzähligen von selbst. Gelöscht wird so oder so nichts.',
+  'limit.enforced':
+    '⏸ {paused} Suche(n) pausiert, damit es in die {limit} Links deines Tarifs passt. Nichts wurde gelöscht — du kannst sie in „📋 Meine Links“ wieder starten, sobald Platz ist.',
   'plan.name.locked': 'Kein Tarif 🔒',
   'plan.lockedNote': 'Es läuft nichts: deine Suchen pausieren, bis du unten einen Tarif wählst.',
   'plan.grandfathered': '(Bestandsschutz — nichts wurde gelöscht, aber für einen neuen Link musst du erst einen entfernen)',

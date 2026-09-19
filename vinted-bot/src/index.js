@@ -84,6 +84,29 @@ monitor.onCapacity = ({ level, report }) => {
   for (const id of config.adminIds) bot.api.sendMessage(id, text).catch(() => {});
 };
 
+/**
+ * A downgrade catching up with somebody's links. They hear it twice: once when
+ * the clock starts, with the deadline and what to do, and once if it runs out
+ * and the extras are paused for them. A search that stops with no explanation
+ * looks like the bot broke.
+ */
+const hours = (seconds) => Math.max(1, Math.round(seconds / 3600));
+monitor.onOverLimit = ({ tgId, lang, limit, active, deadline }) => {
+  bot.api
+    .sendMessage(
+      tgId,
+      t(lang || 'en', 'limit.warned', {
+        limit,
+        active,
+        left: t(lang || 'en', 'unit.hour', { n: hours(deadline - store.now()) }),
+      }),
+    )
+    .catch(() => {});
+};
+monitor.onLimitEnforced = ({ tgId, lang, limit, paused }) => {
+  bot.api.sendMessage(tgId, t(lang || 'en', 'limit.enforced', { paused, limit })).catch(() => {});
+};
+
 monitor.start();
 
 const stop = async (signal) => {

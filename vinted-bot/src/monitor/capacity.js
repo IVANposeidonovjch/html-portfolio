@@ -1,4 +1,4 @@
-import { config, intervalFor, seatCapFor } from '../config.js';
+import { config, intervalFor, isLocked, searchLimitFor, seatCapFor } from '../config.js';
 import * as store from '../db/index.js';
 import { t } from '../i18n/index.js';
 
@@ -129,6 +129,56 @@ export function statsLines() {
     lines.push(`Места: ${used.join(' · ')}`);
   }
   return lines;
+}
+
+/* --------------------------- over-limit sweep --------------------------- */
+
+/**
+ * Who is carrying more active searches than their plan now allows, and what to
+ * do about it. Runs as a sweep rather than hanging off every place a plan can
+ * change, because a plan can change in a lot of places — a lapse, a downgrade,
+ * a failed renewal, an admin /grant, or nothing at all moving except a limit
+ * in the config — and all of them mean the same thing here.
+ *
+ * Nobody is trimmed the moment it happens. They get the grace window to pick
+ * which links matter, and only then are the extras paused for them, newest
+ * first. Paused, never deleted.
+ *
+ * The floor is skipped on purpose. Its limit is zero, but its searches are
+ * already excluded from the polling queue, so pausing them would add nothing
+ * except a pile of switches to flip back on the day somebody pays.
+ */
+export function sweepOverLimit(at = store.now()) {
+  const started = [];
+  const enforced = [];
+
+  for (const row of store.activeSearchCounts.all()) {
+    const plan = store.effectivePlan(row);
+    if (isLocked(plan)) continue;
+    const limit = searchLimitFor(plan) + (row.extra_links || 0);
+    if (limit <= 0) continue;
+
+    if (row.active <= limit) {
+      // back inside the allowance, by their hand or by an upgrade
+      if (row.limit_grace_until) store.setLimitGrace.run(null, row.tg_id);
+      continue;
+    }
+
+    if (!row.limit_grace_until) {
+      const deadline = at + config.payments.downgradeGraceHours * 3600;
+      store.setLimitGrace.run(deadline, row.tg_id);
+      started.push({ tgId: row.tg_id, lang: row.lang, plan, limit, active: row.active, deadline });
+      continue;
+    }
+
+    if (row.limit_grace_until <= at) {
+      const { changes } = store.pauseExcessSearches.run(row.tg_id, row.tg_id, limit);
+      store.setLimitGrace.run(null, row.tg_id);
+      if (changes) enforced.push({ tgId: row.tg_id, lang: row.lang, limit, paused: changes });
+    }
+  }
+
+  return { started, enforced };
 }
 
 /* --------------------------------- alarm -------------------------------- */

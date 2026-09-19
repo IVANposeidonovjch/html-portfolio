@@ -1,7 +1,7 @@
 import { Bot, GrammyError, InlineKeyboard } from 'grammy';
 import {
-  PLANS, PUBLIC_PLANS, SEAT_ENV_VAR, SELLABLE_PLANS, burstFor, config, intervalFor, isLocked,
-  isSubscriptionPlan, planDurationSec, searchLimitFor, starsFor, trialWindow, usdFor,
+  PLANS, PUBLIC_PLANS, SEAT_ENV_VAR, SELLABLE_PLANS, STARTER_PLAN, burstFor, config, intervalFor,
+  isLocked, isSubscriptionPlan, planDurationSec, searchLimitFor, starsFor, trialWindow, usdFor,
 } from '../config.js';
 import * as store from '../db/index.js';
 import { admits, seatAvailableFor, seats, stagger } from '../monitor/capacity.js';
@@ -87,10 +87,14 @@ function nextTierPitch(lang, plan) {
       }),
     );
   }
-  // A week costs a dollar and a month costs nine: the difference between them
-  // is not "+$8 a month", so the trial gets no price line at all. The
-  // comparison right above already prints what the next tier costs.
-  if (delta > 0 && plan !== 'free') lines.push(t(lang, 'plan.next.price', { delta }));
+  // "+$N a month" is only true between two tiers that are both billed monthly.
+  // A free day, a one-dollar week and a nine-dollar month do not subtract into
+  // a monthly figure, so those pairs get no price line at all — the comparison
+  // right above already prints what the next tier costs.
+  const monthly = (tier) => isSubscriptionPlan(tier);
+  if (delta > 0 && monthly(plan) && monthly(next)) {
+    lines.push(t(lang, 'plan.next.price', { delta }));
+  }
   return lines;
 }
 
@@ -102,6 +106,11 @@ const planName = (lang, plan) => t(lang, `plan.name.${plan}`);
  * reads as a dollar a month unless the row says what it actually buys.
  */
 const priceTag = (lang, plan) => {
+  if (plan === STARTER_PLAN) {
+    // free, but only for a day — a bare "$0" next to the paid rows reads as
+    // a free tier, which is exactly what this is not
+    return `$0/${t(lang, 'unit.day', { n: config.payments.starterHours / 24 })}`;
+  }
   if (!usdFor(plan)) return '$0';
   return plan === 'free' ? `$${usdFor(plan)}/${trialPeriod(lang, 'short')}` : `$${usdFor(plan)}`;
 };
@@ -153,7 +162,9 @@ const linkLimit = (user, plan) =>
  */
 function subscriptionLine(lang, user, plan) {
   const date = new Date(user.plan_until * 1000).toISOString().slice(0, 10);
-  if (plan === 'free') return t(lang, 'plan.trialLeft', { left: leftToRun(lang, user.plan_until - store.now()) });
+  const left = () => leftToRun(lang, user.plan_until - store.now());
+  if (plan === STARTER_PLAN) return t(lang, 'plan.starterLeft', { left: left() });
+  if (plan === 'free') return t(lang, 'plan.trialLeft', { left: left() });
   if (user.sub_state === 'active') return t(lang, 'plan.renewsOn', { date });
   if (user.sub_state === 'canceled') return t(lang, 'plan.cancelledUntil', { date });
   if (user.sub_state === 'failed') return t(lang, 'plan.renewFailed', { date });
@@ -802,7 +813,7 @@ export function createBot() {
   async function announceTier(userId, plan) {
     // Scout has no welcome of its own: the trial confirmation already says what
     // it bought, and there is no tier copy written for it to fall back on.
-    if (plan === 'free' || isLocked(plan)) return;
+    if (plan === 'free' || plan === STARTER_PLAN || isLocked(plan)) return;
     const target = store.getUser(userId);
     const lang = target?.lang || 'en';
     const text = t(lang, `tier.welcome.${plan}`, {
@@ -844,7 +855,16 @@ export function createBot() {
     );
     // A limit that moved under someone's feet: they kept what they had, and the
     // line says so before they go looking for the searches they think they lost.
-    if (used > limit && limit > 0) lines.push(t(lang, 'plan.grandfathered'));
+    if (used > limit && limit > 0) {
+      lines.push(
+        user.limit_grace_until && user.limit_grace_until > store.now()
+          ? t(lang, 'plan.overLimit', {
+              limit,
+              left: leftToRun(lang, user.limit_grace_until - store.now()),
+            })
+          : t(lang, 'plan.grandfathered'),
+      );
+    }
     if (hasBurst(plan)) lines.push(t(lang, 'plan.burst', { count: burstFor(plan) }));
     if (user.extra_links && !isLocked(plan)) {
       lines.push(t(lang, 'plan.addon', { count: user.extra_links }));

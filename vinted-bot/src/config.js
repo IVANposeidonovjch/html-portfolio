@@ -11,8 +11,10 @@ export const config = {
 
   intervals: {
     // the floor: nothing is polled here, so the value only exists to keep
-    // intervalFor() from falling through to a tier the account does not hold
-    locked: num(process.env.INTERVAL_LOCKED, 900),
+    // intervalFor() from falling through to a tier the account does not hold,
+    // and to sit no faster than the tier above it
+    locked: num(process.env.INTERVAL_LOCKED, 1800),
+    starter: num(process.env.INTERVAL_STARTER, 1800),
     free: num(process.env.INTERVAL_FREE, 900),
     basic: num(process.env.INTERVAL_BASIC, 300),
     pro: num(process.env.INTERVAL_PRO, 60),
@@ -29,6 +31,7 @@ export const config = {
     // ran out. 0 means it can add nothing and its searches do not run; raise it
     // to hand out a standing allowance without touching any code.
     locked: { searches: num(process.env.LIMIT_LOCKED_SEARCHES, 0) },
+    starter: { searches: num(process.env.LIMIT_STARTER_SEARCHES, 2) },
     free: { searches: num(process.env.LIMIT_FREE_SEARCHES, 2) },
     basic: { searches: num(process.env.LIMIT_BASIC_SEARCHES, 25) },
     pro: { searches: num(process.env.LIMIT_PRO_SEARCHES, 100) },
@@ -90,6 +93,7 @@ export const config = {
       // is the ceiling nobody may be sold past, not a free allowance, and
       // inheriting it would hand Scout the same burst Ranger is charged for.
       locked: num(process.env.BURST_LOCKED, 1),
+      starter: num(process.env.BURST_STARTER, 1),
       free: num(process.env.BURST_FREE, 1),
       basic: num(process.env.BURST_BASIC, 1),
       pro: num(process.env.BURST_PRO, 20),
@@ -147,6 +151,9 @@ export const config = {
       turbo: num(process.env.PRICE_USD_TURBO, 79),
     },
     planDays: num(process.env.PLAN_DAYS, 30),
+    // The day everybody gets for walking in: no signup, no payment, and it
+    // runs out on its own into the floor unless something was bought.
+    starterHours: num(process.env.STARTER_HOURS, 24),
 
     /**
      * Real Telegram Star subscriptions: Telegram re-charges the balance itself
@@ -166,6 +173,14 @@ export const config = {
       periodSec: 2592000,
       graceHours: num(process.env.SUB_GRACE_HOURS, 48),
     },
+
+    /**
+     * How long somebody carrying more searches than their plan now allows has
+     * to pick which ones to keep, before the extras are paused for them.
+     * Dropping a tier should not delete anybody's work without warning, and it
+     * should not leave a downgrade unenforced for ever either.
+     */
+    downgradeGraceHours: num(process.env.DOWNGRADE_GRACE_HOURS, 48),
     // A week. Still expressed in hours so a shorter window stays configurable —
     // what the screens call it is derived from this, never hardcoded.
     trialHours: num(process.env.SCOUT_TRIAL_HOURS, 168),
@@ -204,9 +219,12 @@ export const config = {
  * `elite_max` is the reserved one: no price, no button, /grant only.
  */
 export const LOCKED_PLAN = 'locked';
-export const PLANS = ['locked', 'free', 'basic', 'pro', 'turbo', 'elite_max'];
+export const STARTER_PLAN = 'starter';
+export const PLANS = ['locked', 'starter', 'free', 'basic', 'pro', 'turbo', 'elite_max'];
 export const SELLABLE_PLANS = ['free', 'basic', 'pro', 'turbo'];
-export const PUBLIC_PLANS = [...SELLABLE_PLANS];
+// the starter day is listed so people can see what they are on and what is
+// above it, but it is not for sale — it is handed out on arrival
+export const PUBLIC_PLANS = [STARTER_PLAN, ...SELLABLE_PLANS];
 export const isHiddenPlan = (plan) => !PUBLIC_PLANS.includes(plan);
 
 /** Everything a paid plan grants is gone here, so nothing is polled either. */
@@ -241,6 +259,7 @@ export function burstFor(plan) {
  * it is a month.
  */
 export function planDurationSec(plan) {
+  if (plan === STARTER_PLAN) return config.payments.starterHours * 3600;
   if (plan === 'free') return config.payments.trialHours * 3600;
   return config.payments.planDays * 86400;
 }

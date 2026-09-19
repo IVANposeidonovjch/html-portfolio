@@ -126,6 +126,14 @@ Example:
   'plan.tiers': 'Free — {free}s · Basic — {basic}s · Pro — {pro}s',
   'plan.invoiceDesc': '{days} days · ~{seconds}s interval · up to {limit} links',
   'pay.ok': '✅ {plan} activated for {days} days.',
+  'plan.name.starter': 'Free',
+  'plan.starterLeft': 'Free day: {left} left',
+  'plan.overLimit':
+    "⚠️ You're over your new plan's limit — trim to {limit} links within {left} or the extras pause automatically.",
+  'limit.warned':
+    "⚠️ Your plan now allows {limit} links and you have {active}. Trim to {limit} within {left} and nothing happens — otherwise the newest extras pause on their own. Nothing is deleted either way.",
+  'limit.enforced':
+    '⏸ {paused} search(es) paused to fit your plan\'s {limit} links. Nothing was deleted — resume any of them in 📋 My links once you have room.',
   'plan.name.locked': 'No plan 🔒',
   'plan.lockedNote': 'Nothing is running: your searches are paused until you pick a plan below.',
   'plan.grandfathered': "(grandfathered — nothing was deleted, but you'll need to remove one before adding another)",

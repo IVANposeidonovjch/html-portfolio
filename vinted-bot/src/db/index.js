@@ -25,6 +25,8 @@ for (const [table, column, ddl] of [
   // every Scout trial — which is exactly how those keep working untouched.
   ['users', 'sub_charge_id', 'TEXT'],
   ['users', 'sub_state', 'TEXT'],
+  // when the clock on "trim your links or the extras pause" runs out
+  ['users', 'limit_grace_until', 'INTEGER'],
 ]) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
   if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
@@ -70,7 +72,7 @@ const insertUser = db.prepare(
 const selectUser = db.prepare('SELECT * FROM users WHERE tg_id = ?');
 const lapsePlan = db.prepare(
   `UPDATE users SET plan = 'locked', plan_until = NULL, extra_links = 0,
-                    sub_charge_id = NULL, sub_state = NULL
+                    sub_charge_id = NULL, sub_state = NULL, limit_grace_until = NULL
    WHERE tg_id = ?`,
 );
 
@@ -92,8 +94,22 @@ function readUser(tgId) {
   return user;
 }
 
+const grantStarter = db.prepare(
+  "UPDATE users SET plan = 'starter', plan_until = ? WHERE tg_id = ?",
+);
+
+/**
+ * First contact hands out the starter day: no signup step, no payment, gone by
+ * itself a day later unless something was bought in the meantime.
+ *
+ * Deliberately only on the insert. An account that already exists has either
+ * had its day or had a plan that ran out, and re-granting on every /start
+ * would be a free tier on a loop rather than a day to try the thing.
+ */
 export function upsertUser(tgId, username, lang = 'en') {
+  const existed = !!selectUser.get(tgId);
   insertUser.run(tgId, username || null, lang, now());
+  if (!existed) grantStarter.run(now() + config.payments.starterHours * 3600, tgId);
   return readUser(tgId);
 }
 
@@ -323,6 +339,36 @@ export const listAllUsers = db.prepare(
    LEFT JOIN searches s ON s.user_id = u.tg_id
    GROUP BY u.tg_id
    ORDER BY active DESC, sent DESC, u.created_at`,
+);
+
+/* ------------------------ over-limit enforcement ------------------------ */
+
+/**
+ * Everyone holding at least one active search, with what they hold it on.
+ * The sweep compares that against the limit their current plan allows — which
+ * lives in config, not in SQL — so the shape of the plan ladder stays in one
+ * place instead of being half-encoded in a query.
+ */
+export const activeSearchCounts = db.prepare(
+  `SELECT u.tg_id, u.plan, u.plan_until, u.extra_links, u.lang, u.limit_grace_until,
+          COUNT(s.id) AS active
+   FROM users u
+   JOIN searches s ON s.user_id = u.tg_id AND s.enabled = 1
+   GROUP BY u.tg_id`,
+);
+
+export const setLimitGrace = db.prepare('UPDATE users SET limit_grace_until = ? WHERE tg_id = ?');
+
+/**
+ * Pause everything past the allowance, oldest kept. The ones added first are
+ * the ones somebody has been living with longest, so the newest extras are
+ * what goes quiet — and nothing is deleted, only switched off, so trimming by
+ * hand afterwards is still their choice to make.
+ */
+export const pauseExcessSearches = db.prepare(
+  `UPDATE searches SET enabled = 0
+   WHERE user_id = ? AND enabled = 1
+     AND id NOT IN (SELECT id FROM searches WHERE user_id = ? AND enabled = 1 ORDER BY id LIMIT ?)`,
 );
 
 /** Accounts holding a plan whose paid period has not run out — one seat each. */
