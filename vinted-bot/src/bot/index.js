@@ -74,7 +74,10 @@ function nextTierPitch(lang, plan) {
 
   if (speed > 1) lines.push(t(lang, 'plan.next.speed', { times: times(speed) }));
   if (links > 1) lines.push(t(lang, 'plan.next.links', { times: times(links) }));
-  if (burst > 1) lines.push(t(lang, 'plan.next.burst', { times: times(burst) }));
+  // "20× the burst" from a tier whose burst is 1 multiplies a number the rest
+  // of the screen refuses to print. The comparison right above already shows
+  // the next tier's burst against a row that names none.
+  if (hasBurst(plan) && burst > 1) lines.push(t(lang, 'plan.next.burst', { times: times(burst) }));
   if (lines.length === 2) {
     // nothing measurable differs; say what does rather than an empty promise
     lines.push(
@@ -92,6 +95,13 @@ function nextTierPitch(lang, plan) {
 const planName = (lang, plan) => t(lang, `plan.name.${plan}`);
 
 const priceTag = (plan) => (usdFor(plan) ? `$${usdFor(plan)}` : '$0');
+
+/**
+ * A burst of one is not a burst — it is the plain steady rate, one listing at a
+ * time. Printing "burst 1" as a feature invites the reader to count it as one,
+ * so the tiers that have no burst say nothing about burst at all.
+ */
+const hasBurst = (plan) => burstFor(plan) > 1;
 
 /**
  * "Only a limited number of spots" is a claim, and the seat cap is what makes
@@ -763,8 +773,8 @@ export function createBot() {
       t(lang, 'plan.interval', { seconds: intervalFor(plan) }),
       t(lang, 'plan.limit', { limit: linkLimit(user, plan) }),
       t(lang, 'plan.used', { count: store.countSearches.get(user.tg_id).n }),
-      t(lang, 'plan.burst', { count: burstFor(plan) }),
     ];
+    if (hasBurst(plan)) lines.push(t(lang, 'plan.burst', { count: burstFor(plan) }));
     if (user.extra_links && plan !== 'free') {
       lines.push(t(lang, 'plan.addon', { count: user.extra_links }));
     }
@@ -778,7 +788,7 @@ export function createBot() {
     for (const tier of PUBLIC_PLANS) {
       lines.push(
         (tier === plan ? '▸ ' : '') +
-          t(lang, 'plan.tierRow', {
+          t(lang, hasBurst(tier) ? 'plan.tierRow' : 'plan.tierRowNoBurst', {
             name: planName(lang, tier),
             price: priceTag(tier),
             interval: intervalFor(tier),

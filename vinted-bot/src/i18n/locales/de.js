@@ -196,6 +196,7 @@ Beispiel:
   'btn.soldOut': '{name} · keine Plätze frei',
   'plan.tiersHeader': '<b>Tarife</b>',
   'plan.tierRow': '{name} — {price} · Prüfung alle {interval} s · {links} Links · Schub {burst}',
+  'plan.tierRowNoBurst': '{name} — {price} · Prüfung alle {interval} s · {links} Links',
   'plan.addon': 'Zusätzlich gekaufte Links: +{count}',
   'plan.addonOffer': '➕ {links} Links für {price} — zu jedem bezahlten Tarif.',
   'btn.addon': '➕{links} Links · {stars} ⭐',

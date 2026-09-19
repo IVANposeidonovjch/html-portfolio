@@ -196,6 +196,7 @@ Example:
   'btn.soldOut': '{name} · no spots left',
   'plan.tiersHeader': '<b>Plans</b>',
   'plan.tierRow': '{name} — {price} · checks every {interval}s · {links} links · burst {burst}',
+  'plan.tierRowNoBurst': '{name} — {price} · checks every {interval}s · {links} links',
   'plan.addon': 'Extra links bought: +{count}',
   'plan.addonOffer': '➕ {links} links for {price} — on top of any paid plan.',
   'btn.addon': '➕{links} links · {stars} ⭐',

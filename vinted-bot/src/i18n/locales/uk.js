@@ -196,6 +196,7 @@ export const uk = {
   'btn.soldOut': '{name} · місць немає',
   'plan.tiersHeader': '<b>Тарифи</b>',
   'plan.tierRow': '{name} — {price} · перевірка {interval} с · {links} посилань · сплеск {burst}',
+  'plan.tierRowNoBurst': '{name} — {price} · перевірка {interval} с · {links} посилань',
   'plan.addon': 'Докуплені посилання: +{count}',
   'plan.addonOffer': '➕ {links} посилань за {price} — до будь-якого платного тарифу.',
   'btn.addon': '➕{links} посилань · {stars} ⭐',

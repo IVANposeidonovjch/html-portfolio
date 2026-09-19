@@ -196,6 +196,7 @@ export const ru = {
   'btn.soldOut': '{name} · мест нет',
   'plan.tiersHeader': '<b>Тарифы</b>',
   'plan.tierRow': '{name} — {price} · проверка {interval} с · {links} ссылок · всплеск {burst}',
+  'plan.tierRowNoBurst': '{name} — {price} · проверка {interval} с · {links} ссылок',
   'plan.addon': 'Докупленные ссылки: +{count}',
   'plan.addonOffer': '➕ {links} ссылок за {price} — к любому платному тарифу.',
   'btn.addon': '➕{links} ссылок · {stars} ⭐',

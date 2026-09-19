@@ -309,6 +309,19 @@ test('every locale carries exactly the same keys', () => {
   }
 });
 
+test('the burst-free tier row is the normal row minus the burst clause', () => {
+  for (const [code, dict] of Object.entries(LOCALES)) {
+    assert.ok(!dict['plan.tierRowNoBurst'].includes('{burst}'), `${code}: it still prints a burst`);
+    // the burst clause is the last thing on the row in every language, so the
+    // short version has to be a prefix of the long one — that is what keeps the
+    // two from drifting into differently-worded rows in the same table
+    assert.ok(
+      dict['plan.tierRow'].startsWith(dict['plan.tierRowNoBurst']),
+      `${code}: the two rows would not read as one table\n  ${dict['plan.tierRow']}\n  ${dict['plan.tierRowNoBurst']}`,
+    );
+  }
+});
+
 test('placeholders are the same in every translation of a key', () => {
   const holders = (s) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
   for (const key of Object.keys(LOCALES.en)) {
@@ -1699,6 +1712,74 @@ await (async () => {
     assert.match(edit.payload.text, /\$79/, 'Sniper Elite price');
     assert.ok(edit.payload.text.includes('Sniper Elite'), 'scarcity names the tier it pushes');
     assert.match(edit.payload.text, /🔥/, 'the scarcity line is there');
+  });
+
+  /* ------------------ burst is hidden when there is none ---------------- */
+
+  const BURSTLESS = 7400;
+  store.upsertUser(BURSTLESS, 'burstless', 'en');
+  const burstBefore = { ...cfg.config.delivery.burst };
+  Object.assign(cfg.config.delivery.burst, { free: 1, basic: 1 });
+  const noBurstScreen = await drive(pressUpdate('m:plan', BURSTLESS), BURSTLESS);
+  Object.assign(cfg.config.delivery.burst, burstBefore);
+
+  test('a tier with a burst of 1 says nothing about burst at all', () => {
+    const text = noBurstScreen.find((c) => c.method === 'editMessageText').payload.text;
+    // the reader is on Scout: their own stat line must be gone, not "burst 1"
+    assert.ok(
+      !text.includes(t('en', 'plan.burst', { count: 1 })),
+      `"burst 1" is advertised as a feature:\n${text}`,
+    );
+    assert.ok(!/burst 1\b/.test(text), `a tier row still carries burst 1:\n${text}`);
+
+    // and the rows say it in the right shape, per tier
+    for (const tier of ['free', 'basic']) {
+      assert.ok(
+        text.includes(
+          t('en', 'plan.tierRowNoBurst', {
+            name: LOCALES.en[`plan.name.${tier}`],
+            price: `$${cfg.usdFor(tier)}`,
+            interval: cfg.intervalFor(tier),
+            links: cfg.searchLimitFor(tier),
+          }),
+        ),
+        `${tier} should use the burst-free row:\n${text}`,
+      );
+    }
+    for (const tier of ['pro', 'turbo']) {
+      assert.match(
+        text,
+        new RegExp(`${LOCALES.en[`plan.name.${tier}`]}.*burst ${cfg.burstFor(tier)}`),
+        `${tier} really has a burst and must still show it:\n${text}`,
+      );
+    }
+  });
+
+  store.setPlan.run('basic', store.now() + 86400, BURSTLESS);
+  Object.assign(cfg.config.delivery.burst, { free: 1, basic: 1 });
+  const hunterScreen = await drive(pressUpdate('m:plan', BURSTLESS), BURSTLESS);
+  Object.assign(cfg.config.delivery.burst, burstBefore);
+  store.setPlan.run('free', null, BURSTLESS);
+
+  test('nor is it multiplied at them in the upsell', () => {
+    const text = hunterScreen.find((c) => c.method === 'editMessageText').payload.text;
+    // Hunter has no burst, so "20x the delivery burst" would be multiplying a
+    // number this very screen refuses to print
+    assert.ok(
+      !text.includes(t('en', 'plan.next.burst', { times: '20' })),
+      `the upsell multiplies a burst the tier does not have:\n${text}`,
+    );
+    assert.match(text, /checks 5× more often/, 'the honest parts of the upsell survive');
+    assert.ok(text.includes(`burst ${cfg.burstFor('pro')}`), "and Ranger's own row still names its burst");
+  });
+
+  const withBurstScreen = await drive(pressUpdate('m:plan', BURSTLESS), BURSTLESS);
+  test('and a tier that does have one still shows it', () => {
+    const text = withBurstScreen.find((c) => c.method === 'editMessageText').payload.text;
+    assert.ok(
+      text.includes(t('en', 'plan.burst', { count: cfg.burstFor('free') })),
+      `with burst ${cfg.burstFor('free')} configured the line belongs there:\n${text}`,
+    );
   });
 
   const rejected = await runCommand('/grant 4242 platinum 30', 1);
