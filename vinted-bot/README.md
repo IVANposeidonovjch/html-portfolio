@@ -103,7 +103,7 @@ src/
     sender.js           дорожка на чат, корзина токенов, ретраи 429
   bot/                  меню, мастер добавления, тарифы, платежи ⭐
   i18n/                 t(lang, key) и словари ru / en / de / uk
-tools/                  probe.mjs и probe-standalone.mjs — снять живой контракт API
+tools/                  probe*.mjs — снять живой контракт API; webshare.mjs — пул прокси
 ```
 
 Ключевые решения:
@@ -210,6 +210,31 @@ PROXY=http://user:pass@host:port node tools/probe-standalone.mjs "https://www.vi
 проба пишет это прямым текстом. Запускать её нужно на ссылке, где выбран бренд, —
 иначе проверять нечего. Рабочий вариант фиксируется в `.env`:
 `VINTED_API_STRATEGY=svc-catalogue-attrs`.
+
+### Пул прокси: `tools/webshare.mjs`
+
+Кнопка Replace Proxy в панели Webshare выдаёт новый IP и молчит о том, что
+`PROXIES` в `.env` всё ещё называет старый. Бот после этого ходит по адресу,
+которого нет: один мёртвый маршрут из N, ничего явно не сломано, все просто
+опаздывают. Скрипт делает замену **и** печатает строку `PROXIES`, которая
+должна за ней последовать, — разойтись им негде.
+
+```bash
+export WEBSHARE_TOKEN=...                                   # панель -> API -> Keys
+node tools/webshare.mjs list                                # пул по странам
+node tools/webshare.mjs env                                 # только строка PROXIES=
+node tools/webshare.mjs replace --from US --to FR           # СУХОЙ ПРОГОН
+node tools/webshare.mjs replace --from US --to FR --count 5 --go
+node tools/webshare.mjs replace --ip 9.142.11.148 --to FR --go
+```
+
+Замена — это покупка по тарифу и отменить её отсюда нельзя, поэтому без `--go`
+ничего не происходит: скрипт спрашивает у Webshare, что бы он сделал
+(`dry_run`), и печатает ответ. Токен не печатается никогда; строка `PROXIES`
+содержит пароли прокси — это и есть её смысл, обращаться с ней как с `.env`.
+
+География имеет значение: поиски идут на `vinted.fr`, `vinted.it`, `vinted.pl`,
+`vinted.de`, и американские выходные IP ловят 403 и лимиты охотнее европейских.
 
 Замер 17.09.2026: поиск с `brand_ids=344976` в плоской схеме вернул объявление
 adidas — фильтр принят и выброшен. Поэтому запросу с `*_ids` плоская схема
